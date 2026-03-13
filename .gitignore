@@ -20,11 +20,13 @@ env/
 # jupyter
 .ipynb_checkpoints/
 
-# data (large files)
-*.csv
+# data (large files - except BACE1 folder)
 *.npy
 *.json
-!data/BACE1/README.md
+
+# csv except data/BACE1
+*.csv
+!data/BACE1/*.csv
 
 # pdf
 *.pdf
