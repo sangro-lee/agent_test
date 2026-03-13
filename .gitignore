@@ -1,0 +1,38 @@
+# outputs & experiments
+outputs/
+memory/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+*.so
+
+# conda / venv
+.conda/
+.venv/
+venv/
+env/
+
+# jupyter
+.ipynb_checkpoints/
+
+# data (large files)
+*.csv
+*.npy
+*.json
+!data/BACE1/README.md
+
+# pdf
+*.pdf
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
