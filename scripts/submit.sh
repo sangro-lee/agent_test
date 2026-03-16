@@ -13,4 +13,5 @@ mkdir -p logs
 source ~/anaconda3/etc/profile.d/conda.sh
 conda activate ligand_screen
 
-bash "$(dirname "$0")/run_all_experiments.sh"
+ROOT="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+bash "$ROOT/scripts/run_all_experiments.sh"

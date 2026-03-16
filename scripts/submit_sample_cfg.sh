@@ -21,7 +21,7 @@ EXP="${1:-sme_random}"
 GUIDANCE_SCALE="${2:-3.0}"
 TARGET_PIC50="${3:-}"
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 PYTHON="${PYTHON:-python}"
 RUN_DIR="$ROOT/outputs/runs/${EXP}"
 RESOLVED="$RUN_DIR/config_resolved.yaml"
