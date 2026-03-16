@@ -15,9 +15,10 @@
 EXP="${1:-sme_random}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${PYTHON:-python}"
-RESOLVED="/tmp/${EXP}_resolved.yaml"
+RUN_DIR="$ROOT/outputs/runs/${EXP}"
+RESOLVED="$RUN_DIR/config_resolved.yaml"
 
-mkdir -p logs
+mkdir -p logs "$RUN_DIR"
 
 source ~/anaconda3/etc/profile.d/conda.sh
 conda activate ligand_screen
@@ -26,7 +27,7 @@ export PYTHONPATH=$ROOT
 cd "$ROOT"
 
 # run_root를 실험 폴더로 고정 (auto → 실제 경로)
-sed "s|run_root: \"auto\"|run_root: \"$ROOT/outputs/runs/${EXP}\"|" \
+sed "s|run_root: \"auto\"|run_root: \"$RUN_DIR\"|" \
   "$ROOT/configs/experiments/${EXP}.yaml" > "$RESOLVED"
 
 echo "[train_diffusion] EXP=$EXP"

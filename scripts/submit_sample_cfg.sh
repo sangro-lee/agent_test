@@ -23,9 +23,10 @@ TARGET_PIC50="${3:-}"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${PYTHON:-python}"
-RESOLVED="/tmp/${EXP}_resolved.yaml"
+RUN_DIR="$ROOT/outputs/runs/${EXP}"
+RESOLVED="$RUN_DIR/config_resolved.yaml"
 
-mkdir -p logs
+mkdir -p logs "$RUN_DIR"
 
 source ~/anaconda3/etc/profile.d/conda.sh
 conda activate ligand_screen
@@ -34,7 +35,7 @@ export PYTHONPATH=$ROOT
 cd "$ROOT"
 
 # run_root를 실험 폴더로 고정
-sed "s|run_root: \"auto\"|run_root: \"$ROOT/outputs/runs/${EXP}\"|" \
+sed "s|run_root: \"auto\"|run_root: \"$RUN_DIR\"|" \
   "$ROOT/configs/experiments/${EXP}.yaml" > "$RESOLVED"
 
 echo "[sample_cfg] EXP=$EXP  guidance_scale=$GUIDANCE_SCALE  target_pIC50=${TARGET_PIC50:-auto}"

@@ -30,7 +30,8 @@ for i in "${!EXPERIMENTS[@]}"; do
   echo "========================================"
 
   # output.run_root를 실험명으로 고정 (타임스탬프 충돌 방지)
-  RESOLVED_CFG="/tmp/${EXP}_resolved.yaml"
+  mkdir -p "$RUN_DIR"
+  RESOLVED_CFG="$RUN_DIR/config_resolved.yaml"
   sed "s|run_root: \"auto\"|run_root: \"$RUN_DIR\"|" \
     $CONFIGS/${EXP}.yaml > $RESOLVED_CFG
 
