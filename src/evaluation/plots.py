@@ -9,17 +9,21 @@ sns.set_style("whitegrid")
 
 
 def plot_scatter(y_true, y_pred, title, save_path):
+    from scipy.stats import pearsonr
+
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
+
+    r, _ = pearsonr(y_true, y_pred)
 
     fig, ax = plt.subplots(figsize=(6, 6))
     ax.scatter(y_true, y_pred, alpha=0.6, edgecolor="none")
     lo = float(min(y_true.min(), y_pred.min()))
     hi = float(max(y_true.max(), y_pred.max()))
     ax.plot([lo, hi], [lo, hi], linestyle="--", linewidth=1)
-    ax.set_xlabel("True")
-    ax.set_ylabel("Pred")
-    ax.set_title(title)
+    ax.set_xlabel("True pIC50")
+    ax.set_ylabel("Pred pIC50")
+    ax.set_title(f"{title}  (Pearson r = {r:.3f})")
 
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -50,32 +54,25 @@ def plot_loss_curve(history, save_path):
     plt.close(fig)
 
 
-def plot_latent_umap(latents, labels, save_path):
+def plot_latent_tsne(latents, labels, save_path, split_name=""):
+    from sklearn.manifold import TSNE
+
     latents = np.asarray(latents, dtype=float)
     labels = np.asarray(labels, dtype=float)
 
     if latents.ndim != 2 or latents.shape[0] == 0:
         raise ValueError("latents must be a non-empty 2D array")
 
-    try:
-        import umap
+    perplexity = min(30, latents.shape[0] - 1)
+    emb = TSNE(n_components=2, perplexity=perplexity, random_state=42).fit_transform(latents)
 
-        reducer = umap.UMAP(n_components=2, random_state=42)
-        emb = reducer.fit_transform(latents)
-        title = "Latent UMAP"
-    except Exception:
-        from sklearn.decomposition import PCA
-
-        reducer = PCA(n_components=2)
-        emb = reducer.fit_transform(latents)
-        title = "Latent PCA (UMAP fallback)"
-
+    title = f"Latent t-SNE{' — ' + split_name if split_name else ''}"
     fig, ax = plt.subplots(figsize=(7, 6))
     sc = ax.scatter(emb[:, 0], emb[:, 1], c=labels, cmap="viridis", s=12, alpha=0.8)
     cbar = fig.colorbar(sc, ax=ax)
-    cbar.set_label("Label")
-    ax.set_xlabel("Dim 1")
-    ax.set_ylabel("Dim 2")
+    cbar.set_label("pIC50")
+    ax.set_xlabel("t-SNE 1")
+    ax.set_ylabel("t-SNE 2")
     ax.set_title(title)
 
     save_path = Path(save_path)
