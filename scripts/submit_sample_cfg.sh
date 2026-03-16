@@ -21,7 +21,11 @@ EXP="${1:-sme_random}"
 GUIDANCE_SCALE="${2:-3.0}"
 TARGET_PIC50="${3:-}"
 
-ROOT="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+_D="${SLURM_SUBMIT_DIR:-.}"
+if   [ -d "$_D/src" ];      then ROOT="$(cd "$_D"    && pwd)"
+elif [ -d "$_D/../src" ];   then ROOT="$(cd "$_D/.." && pwd)"
+else                              ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+fi
 PYTHON="${PYTHON:-python}"
 RUN_DIR="$ROOT/outputs/runs/${EXP}"
 RESOLVED="$RUN_DIR/config_resolved.yaml"

@@ -2,7 +2,11 @@
 # 6개 실험 순차 실행: (mlp|gnn|sme) x (scaffold|random)
 
 # 스크립트 위치 기준으로 ROOT 자동 감지 (어느 서버에서든 동작)
-ROOT="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+_D="${SLURM_SUBMIT_DIR:-.}"
+if   [ -d "$_D/src" ];      then ROOT="$(cd "$_D"    && pwd)"
+elif [ -d "$_D/../src" ];   then ROOT="$(cd "$_D/.." && pwd)"
+else                              ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+fi
 PYTHON="${PYTHON:-python}"
 CONFIGS=$ROOT/configs/experiments
 
