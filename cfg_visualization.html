@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CFG Diffusion Model Architecture</title>
+    <style>
+        :root {
+            --bg-dark: #0f172a;
+            --card-bg: #1e293b;
+            --text-main: #f8fafc;
+            --text-dim: #94a3b8;
+            --color-cond: #3b82f6;
+            --color-latent: #10b981;
+            --color-time: #f59e0b;
+            --color-noise: #a855f7;
+            --accent: #ef4444;
+            --border: #334155;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
+        body { background-color: var(--bg-dark); color: var(--text-main); min-height: 100vh; padding: 2rem; display: flex; flex-direction: column; align-items: center; }
+        .container { max-width: 1100px; width: 100%; }
+        header { margin-bottom: 2rem; border-bottom: 1px solid var(--border); padding-bottom: 1rem; }
+        h1 { font-size: 2rem; font-weight: 800; background: linear-gradient(to right, var(--color-cond), var(--color-noise)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        p.subtitle { color: var(--text-dim); margin-top: 0.5rem; }
+        .tabs { display: flex; gap: 1rem; margin-bottom: 2rem; background: var(--card-bg); padding: 0.5rem; border-radius: 12px; border: 1px solid var(--border); }
+        .tab { flex: 1; padding: 0.75rem; text-align: center; cursor: pointer; border-radius: 8px; font-weight: 600; transition: all 0.3s; color: var(--text-dim); }
+        .tab.active { background: var(--color-cond); color: white; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3); }
+        .tab-content { display: none; background: var(--card-bg); border-radius: 20px; padding: 2.5rem; border: 1px solid var(--border); box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); position: relative; overflow: hidden; }
+        .tab-content.active { display: block; animation: fadeIn 0.5s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .diagram-container { display: flex; flex-direction: column; align-items: center; gap: 1.5rem; position: relative; }
+        .box { background: rgba(255,255,255,0.05); border: 2px solid var(--border); border-radius: 12px; padding: 1rem 1.5rem; text-align: center; position: relative; min-width: 140px; }
+        .box.cond { border-color: var(--color-cond); background: rgba(59, 130, 246, 0.1); }
+        .box.time { border-color: var(--color-time); background: rgba(245, 158, 11, 0.1); }
+        .box.latent { border-color: var(--color-latent); background: rgba(16, 185, 129, 0.1); }
+        .box.noise { border-color: var(--color-noise); background: rgba(168, 85, 247, 0.1); }
+        .arrow { width: 2px; height: 30px; background: var(--border); position: relative; margin: 5px 0; }
+        .arrow::after { content: ''; position: absolute; bottom: -5px; left: -4px; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 8px solid var(--border); }
+        .arrow.pulse { background: var(--color-latent); animation: pulseArrow 1.5s infinite; }
+        .arrow.pulse::after { border-top-color: var(--color-latent); }
+        @keyframes pulseArrow {
+            0% { transform: translateY(-5px); opacity: 0.3; }
+            50% { transform: translateY(0); opacity: 1; }
+            100% { transform: translateY(5px); opacity: 0.3; }
+        }
+        .row { display: flex; gap: 2rem; align-items: center; justify-content: center; width: 100%; }
+        .adain-layer { border: 2px dashed #475569; border-radius: 16px; padding: 1.5rem; background: rgba(0,0,0,0.2); width: 100%; max-width: 600px; }
+        .adain-math { font-family: 'Courier New', monospace; font-size: 1.1rem; color: var(--color-latent); margin: 1rem 0; padding: 0.75rem 1rem; background: #000; border-radius: 6px; border-left: 3px solid var(--color-latent); }
+        .cfg-canvas-container { position: relative; width: 400px; height: 300px; background: #000; border-radius: 12px; margin-top: 1rem; }
+        .slider-group { width: 100%; max-width: 400px; margin-top: 1rem; }
+        input[type=range] { width: 100%; height: 6px; border-radius: 3px; accent-color: var(--color-cond); cursor: pointer; }
+        .value-display { font-weight: bold; color: var(--color-cond); font-size: 1.2rem; }
+        .split-view { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
+        .side { padding: 1.5rem; border-radius: 12px; border: 1px solid var(--border); }
+        .side h3 { margin-bottom: 1.5rem; text-align: center; border-bottom: 1px solid var(--border); padding-bottom: 0.75rem; font-size: 1.1rem; }
+        .prob-badge { font-size: 0.8rem; padding: 2px 8px; border-radius: 20px; background: var(--accent); color: white; margin-left: 5px; }
+        .tag { position: absolute; top: 1rem; right: 1rem; font-size: 0.75rem; color: var(--text-dim); background: rgba(0,0,0,0.3); padding: 4px 10px; border-radius: 100px; }
+        .legend { display: flex; gap: 1.5rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+        .legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; }
+        .legend-dot { width: 12px; height: 12px; border-radius: 50%; }
+        .section-title { font-size: 1rem; font-weight: 700; color: var(--text-dim); margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 0.05em; }
+        @media (max-width: 768px) { .split-view { grid-template-columns: 1fr; } .row { flex-direction: column; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <header>
+        <h1>CFG Diffusion Model 시각화</h1>
+        <p class="subtitle">ConditionalDenoisingMLP (AdaIN) + Classifier-Free Guidance Sampling Pipeline</p>
+    </header>
+
+    <div class="legend">
+        <div class="legend-item"><div class="legend-dot" style="background:var(--color-cond)"></div> 조건 (pIC50)</div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--color-latent)"></div> Latent z</div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--color-time)"></div> Timestep t</div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--color-noise)"></div> Noise ε</div>
+    </div>
+
+    <div class="tabs">
+        <div class="tab active" onclick="showTab(0)">모델 아키텍처</div>
+        <div class="tab" onclick="showTab(1)">CFG 샘플링</div>
+        <div class="tab" onclick="showTab(2)">학습 vs 추론</div>
+    </div>
+
+    <!-- Tab 1: Architecture -->
+    <div id="tab-0" class="tab-content active">
+        <div class="tag">ConditionalDenoisingMLP (AdaIN)</div>
+        <div class="diagram-container">
+            <div class="row">
+                <div style="display:flex;flex-direction:column;align-items:center;">
+                    <div class="box time"><small>Timestep (0~1)</small><br/><strong>t &nbsp;(B×1)</strong></div>
+                    <div class="arrow"></div>
+                    <div class="box" style="border-color:var(--color-time);font-size:0.85rem;">time_mlp<br/><small>1→64→SiLU→64</small></div>
+                    <div class="arrow"></div>
+                    <div class="box" style="border-color:var(--color-time);font-size:0.85rem;"><strong>t_embed &nbsp;(B×64)</strong></div>
+                </div>
+                <div style="display:flex;flex-direction:column;align-items:center;">
+                    <div class="box cond"><small>Condition (pIC50 or 0.0)</small><br/><strong>c &nbsp;(B×1)</strong></div>
+                    <div class="arrow"></div>
+                    <div class="box" style="border-color:var(--color-cond);font-size:0.85rem;">cond_mlp<br/><small>1→64→SiLU→64</small></div>
+                    <div class="arrow"></div>
+                    <div class="box" style="border-color:var(--color-cond);font-size:0.85rem;"><strong>c_embed &nbsp;(B×64)</strong></div>
+                </div>
+            </div>
+
+            <div class="arrow"></div>
+            <div class="box" style="background:linear-gradient(90deg,rgba(245,158,11,0.3),rgba(59,130,246,0.3));border-color:#8b6914;">
+                <strong>Concat → cond &nbsp;(B×128)</strong>
+            </div>
+
+            <div style="width:100%;border-top:1px dashed var(--border);margin:0.5rem 0;"></div>
+
+            <div class="box latent"><small>Noisy Latent</small><br/><strong>z<sub>t</sub> &nbsp;(B×D)</strong></div>
+            <div class="arrow"></div>
+            <div class="box" style="font-size:0.85rem;">input_proj<br/><small>Linear(D→512)</small></div>
+            <div class="arrow"></div>
+            <div class="box" style="font-size:0.85rem;"><strong>x &nbsp;(B×512)</strong></div>
+
+            <div class="arrow pulse"></div>
+
+            <!-- AdaIN Layer -->
+            <div class="adain-layer">
+                <div class="section-title" style="text-align:center;">× 6 &nbsp;_CondInjectionLayer &nbsp;(Residual)</div>
+                <div class="diagram-container" style="gap:1rem;">
+                    <div class="row">
+                        <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:0.5rem;">
+                            <div class="box" style="font-size:0.8rem;min-width:110px;">f1: Linear(512→512)</div>
+                            <div class="arrow" style="height:20px;"></div>
+                            <div class="box" style="font-size:0.8rem;min-width:110px;">norm: LayerNorm(512)</div>
+                        </div>
+                        <div style="font-size:1.5rem;color:var(--text-dim);">+</div>
+                        <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:0.5rem;">
+                            <div class="box" style="border-color:var(--color-cond);font-size:0.75rem;min-width:130px;">
+                                cond2wb<br/>
+                                <small>128→512→SiLU→1024</small>
+                            </div>
+                            <div class="arrow" style="height:20px;"></div>
+                            <div class="row" style="gap:0.5rem;">
+                                <div class="box" style="font-size:0.75rem;min-width:60px;border-color:var(--color-time);">w (512)</div>
+                                <div class="box" style="font-size:0.75rem;min-width:60px;border-color:var(--color-cond);">b (512)</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="adain-math">
+                        h = f2( GELU( <span style="color:var(--color-time)">w</span> × norm(f1(x)) + <span style="color:var(--color-cond)">b</span> ) )<br/>
+                        x = x + h &nbsp;&nbsp;<span style="color:var(--text-dim);font-size:0.9rem;">← residual</span>
+                    </div>
+                    <div style="font-size:0.8rem;color:var(--text-dim);text-align:center;">
+                        조건(pIC50)이 각 레이어의 Scale(w)과 Shift(b)를 동적으로 결정
+                    </div>
+                </div>
+            </div>
+
+            <div class="arrow pulse"></div>
+            <div class="box" style="font-size:0.85rem;">output_proj &nbsp;<small>Linear(512→D)</small></div>
+            <div class="arrow"></div>
+            <div class="box noise"><small>Predicted Noise</small><br/><strong>ε<sub>pred</sub> &nbsp;(B×D)</strong></div>
+        </div>
+    </div>
+
+    <!-- Tab 2: CFG Sampling -->
+    <div id="tab-1" class="tab-content">
+        <div class="tag">DDIM + Classifier-Free Guidance</div>
+        <div class="diagram-container">
+            <div class="box latent" style="width:260px;">
+                <strong>z<sub>T</sub> ~ N(0, I)</strong><br/>
+                <small>Pure Gaussian Noise</small>
+            </div>
+            <div class="arrow pulse"></div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;width:100%;max-width:500px;">
+                <div class="box cond" style="text-align:center;">
+                    <strong>ε<sub>cond</sub></strong><br/>
+                    <small>model(z<sub>t</sub>, t, c=<span style="color:var(--color-cond)">target</span>)</small>
+                </div>
+                <div class="box" style="border-color:#64748b;text-align:center;">
+                    <strong>ε<sub>uncond</sub></strong><br/>
+                    <small>model(z<sub>t</sub>, t, c=<span style="color:#64748b">0.0</span>)</small>
+                </div>
+            </div>
+
+            <div class="box noise" style="width:100%;max-width:500px;border-width:3px;padding:1.5rem;">
+                <div style="font-size:0.85rem;color:var(--text-dim);margin-bottom:0.75rem;">CFG 공식</div>
+                <div style="font-family:'Courier New',monospace;font-size:1.3rem;line-height:1.8;">
+                    ε<sub>g</sub> = ε<sub>u</sub> + <span id="w-val-text" style="color:var(--color-cond);font-size:1.5rem;font-weight:bold;">3.0</span> × (ε<sub>c</sub> − ε<sub>u</sub>)
+                </div>
+            </div>
+
+            <div class="cfg-canvas-container">
+                <canvas id="cfgCanvas" width="400" height="300"></canvas>
+                <div style="position:absolute;top:10px;left:12px;font-size:0.7rem;color:#475569;">Latent Space 방향 시각화</div>
+            </div>
+
+            <div class="slider-group">
+                <div style="display:flex;justify-content:space-between;margin-bottom:0.5rem;">
+                    <span style="color:var(--text-dim);">Guidance Scale (w)</span>
+                    <span class="value-display" id="w-display">3.0</span>
+                </div>
+                <input type="range" id="w-slider" min="0" max="5" step="0.1" value="3.0" oninput="updateCFG(this.value)">
+                <div style="display:flex;justify-content:space-between;font-size:0.75rem;color:var(--text-dim);margin-top:4px;">
+                    <span>w=0: unconditional</span>
+                    <span>w=1: conditional</span>
+                    <span>w&gt;1: amplified</span>
+                </div>
+                <p style="font-size:0.82rem;color:var(--text-dim);margin-top:0.75rem;text-align:center;">
+                    w가 클수록 pIC50 조건을 강하게 반영하지만 샘플 다양성은 줄어듭니다.
+                </p>
+            </div>
+
+            <div class="arrow pulse"></div>
+            <div class="box" style="width:260px;">z<sub>t-1</sub> = ddim_step(z<sub>t</sub>, ε<sub>g</sub>)</div>
+            <div style="color:var(--text-dim);font-size:0.85rem;">↑ T=1000번 반복</div>
+            <div class="arrow"></div>
+            <div class="box latent" style="width:260px;"><strong>z<sub>0</sub></strong> → Denormalize → Cosine Sim → Top-K 분자</div>
+        </div>
+    </div>
+
+    <!-- Tab 3: Train vs Inference -->
+    <div id="tab-2" class="tab-content">
+        <div class="tag">Operation Modes</div>
+        <div class="split-view">
+            <div class="side">
+                <h3>🏋️ 학습 (Training)</h3>
+                <div class="diagram-container" style="gap:1rem;">
+                    <div class="box latent">z<sub>0</sub> (Train Latent)</div>
+                    <div class="arrow"></div>
+                    <div class="box noise" style="font-size:0.85rem;">z<sub>t</sub> = add_noise(z<sub>0</sub>, t)<br/><small>t ~ Uniform(0, T)</small></div>
+                    <div style="width:100%;border:1px dashed var(--border);padding:1rem;border-radius:8px;">
+                        <div style="font-weight:bold;color:var(--color-cond);margin-bottom:0.75rem;">Condition Dropout</div>
+                        <div style="display:flex;flex-direction:column;gap:8px;font-size:0.88rem;">
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <span>c = pIC50 (normalized)</span>
+                                <span class="prob-badge">85%</span>
+                            </div>
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <span>c = 0.0 (NULL_COND)</span>
+                                <span class="prob-badge" style="background:#475569;">15%</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="box" style="font-size:0.85rem;">ε<sub>pred</sub> = model(z<sub>t</sub>, t, c)</div>
+                    <div class="box noise" style="font-size:0.9rem;">
+                        <strong>Loss = MSE(ε, ε<sub>pred</sub>)</strong>
+                    </div>
+                    <p style="font-size:0.8rem;color:var(--text-dim);line-height:1.6;text-align:center;">
+                        Dropout으로 동일 모델이<br/>conditional + unconditional을 동시에 학습
+                    </p>
+                </div>
+            </div>
+
+            <div class="side">
+                <h3>🚀 추론 (Inference)</h3>
+                <div class="diagram-container" style="gap:1rem;">
+                    <div class="box latent">z<sub>T</sub> ~ N(0, I)</div>
+                    <div class="arrow pulse"></div>
+                    <div class="box cond" style="font-size:0.85rem;">
+                        <strong>Target 고정</strong><br/>
+                        <small>e.g., pIC50 = 9.0</small>
+                    </div>
+                    <div class="arrow"></div>
+                    <div style="width:100%;border:1px solid var(--color-noise);padding:1rem;border-radius:8px;background:rgba(168,85,247,0.05);">
+                        <div style="font-size:0.8rem;text-align:center;margin-bottom:0.5rem;color:var(--text-dim);">매 step t=1000...1</div>
+                        <div style="font-size:0.8rem;font-family:monospace;">
+                            ε<sub>c</sub> = model(z<sub>t</sub>, t, <span style="color:var(--color-cond)">target</span>)<br/>
+                            ε<sub>u</sub> = model(z<sub>t</sub>, t, <span style="color:#64748b">0.0</span>)<br/>
+                            ε<sub>g</sub> = ε<sub>u</sub> + w×(ε<sub>c</sub>−ε<sub>u</sub>)
+                        </div>
+                    </div>
+                    <div class="arrow"></div>
+                    <div class="box latent"><strong>z<sub>0</sub></strong> 생성 완료</div>
+                    <div class="arrow"></div>
+                    <div class="box" style="font-size:0.85rem;">
+                        Cosine Sim → 가장 가까운<br/>train 분자 검색
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    function showTab(index) {
+        document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', i === index));
+        document.querySelectorAll('.tab-content').forEach((c, i) => c.classList.toggle('active', i === index));
+        if (index === 1) drawCFGVectors(3.0);
+    }
+
+    const canvas = document.getElementById('cfgCanvas');
+    const ctx = canvas.getContext('2d');
+
+    function updateCFG(val) {
+        document.getElementById('w-display').innerText = parseFloat(val).toFixed(1);
+        document.getElementById('w-val-text').innerText = parseFloat(val).toFixed(1);
+        drawCFGVectors(parseFloat(val));
+    }
+
+    function drawVector(cx, cy, dx, dy, color, label, width) {
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.lineWidth = width || 2;
+        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + dx, cy + dy); ctx.stroke();
+        const angle = Math.atan2(dy, dx);
+        ctx.beginPath();
+        ctx.moveTo(cx+dx, cy+dy);
+        ctx.lineTo(cx+dx - 10*Math.cos(angle-Math.PI/6), cy+dy - 10*Math.sin(angle-Math.PI/6));
+        ctx.lineTo(cx+dx - 10*Math.cos(angle+Math.PI/6), cy+dy - 10*Math.sin(angle+Math.PI/6));
+        ctx.closePath(); ctx.fill();
+        ctx.font = 'bold 12px sans-serif';
+        ctx.fillText(label, cx + dx + 8, cy + dy);
+    }
+
+    function drawCFGVectors(w) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const cx = 120, cy = 220;
+        ctx.strokeStyle = '#1e293b'; ctx.setLineDash([5,5]); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(cx, 10); ctx.lineTo(cx, canvas.height-10); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(10, cy); ctx.lineTo(canvas.width-10, cy); ctx.stroke();
+        ctx.setLineDash([]);
+
+        const vU = { x: 80, y: -50 };
+        const vC = { x: 130, y: -120 };
+        drawVector(cx, cy, vU.x, vU.y, '#64748b', 'ε_uncond', 2);
+        drawVector(cx, cy, vC.x, vC.y, '#3b82f6', 'ε_cond', 2);
+
+        const diffX = vC.x - vU.x, diffY = vC.y - vU.y;
+        const gX = vU.x + w * diffX, gY = vU.y + w * diffY;
+
+        ctx.strokeStyle = '#334155'; ctx.setLineDash([3,3]); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(cx+vU.x, cy+vU.y); ctx.lineTo(cx+gX, cy+gY); ctx.stroke();
+        ctx.setLineDash([]);
+
+        drawVector(cx, cy, gX, gY, '#a855f7', 'ε_guided', 3);
+
+        ctx.fillStyle = '#64748b'; ctx.font = '11px sans-serif';
+        ctx.fillText('w=' + w.toFixed(1), cx + gX + 8, cy + gY + 16);
+    }
+
+    window.onload = () => drawCFGVectors(3.0);
+</script>
+</body>
+</html>

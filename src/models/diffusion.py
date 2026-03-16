@@ -42,10 +42,38 @@ class DenoisingMLP(nn.Module):
         return self.main(h)
 
 
+class _CondInjectionLayer(nn.Module):
+    """
+    Single AdaIN-style condition injection layer (from G2D-Diff paper).
+    x_{l+1} = f2( GELU( w_c * norm(f1(x_l)) + b_c ) )
+    where w_c, b_c = cond2wb(cond)
+    """
+    def __init__(self, hidden_dim: int, cond_embed_dim: int):
+        super().__init__()
+        self.f1 = nn.Linear(hidden_dim, hidden_dim)
+        self.norm = nn.LayerNorm(hidden_dim)
+        self.f2 = nn.Linear(hidden_dim, hidden_dim)
+        # cond2wb: condition+time → scale and shift
+        self.cond2wb = nn.Sequential(
+            nn.Linear(cond_embed_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim * 2),  # first half=scale, second half=shift
+        )
+
+    def forward(self, x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
+        wb = self.cond2wb(cond)                      # (B, hidden_dim*2)
+        w, b = wb.chunk(2, dim=-1)                   # each (B, hidden_dim)
+        h = self.norm(self.f1(x))
+        h = w * h + b                                # AdaIN scale+shift
+        h = self.f2(torch.nn.functional.gelu(h))
+        return x + h                                 # residual
+
+
 class ConditionalDenoisingMLP(nn.Module):
     """
     Classifier-Free Guidance (CFG) denoising network.
-    Input: (z_t, t_normalized, c) where c = normalized pIC50 scalar (or null=0 for uncond)
+    Condition is injected at every layer via AdaIN-style scale/shift
+    (following G2D-Diff: x_{l+1} = f2(GELU(w_c * norm(f1(x_l)) + b_c))).
 
     CFG inference:
         eps_uncond = forward(z_t, t, c=null)
@@ -60,11 +88,13 @@ class ConditionalDenoisingMLP(nn.Module):
         time_dim: int = 64,
         cond_dim: int = 64,
         hidden_dim: int = 512,
+        num_layers: int = 6,
     ):
         super().__init__()
         self.latent_dim = int(latent_dim)
         self.time_dim = int(time_dim)
         self.cond_dim = int(cond_dim)
+        self.num_layers = int(num_layers)
 
         # Time embedding
         self.time_mlp = nn.Sequential(
@@ -79,13 +109,19 @@ class ConditionalDenoisingMLP(nn.Module):
             nn.Linear(self.cond_dim, self.cond_dim),
         )
 
-        self.main = nn.Sequential(
-            nn.Linear(self.latent_dim + self.time_dim + self.cond_dim, hidden_dim),
-            nn.SiLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.SiLU(),
-            nn.Linear(hidden_dim, self.latent_dim),
-        )
+        cond_embed_dim = self.time_dim + self.cond_dim
+
+        # Input projection: latent → hidden
+        self.input_proj = nn.Linear(self.latent_dim, hidden_dim)
+
+        # AdaIN condition injection layers
+        self.layers = nn.ModuleList([
+            _CondInjectionLayer(hidden_dim, cond_embed_dim)
+            for _ in range(self.num_layers)
+        ])
+
+        # Output projection: hidden → latent (predict noise)
+        self.output_proj = nn.Linear(hidden_dim, self.latent_dim)
 
         self.register_buffer("z_mean", torch.zeros(self.latent_dim), persistent=True)
         self.register_buffer("z_std", torch.ones(self.latent_dim), persistent=True)
@@ -112,10 +148,14 @@ class ConditionalDenoisingMLP(nn.Module):
         if c.dim() == 1:
             c = c.unsqueeze(1)
 
-        t_embed = self.time_mlp(t)
-        c_embed = self.cond_mlp(c)
-        h = torch.cat([z_t, t_embed, c_embed], dim=1)
-        return self.main(h)
+        t_embed = self.time_mlp(t)                        # (B, time_dim)
+        c_embed = self.cond_mlp(c)                        # (B, cond_dim)
+        cond = torch.cat([t_embed, c_embed], dim=-1)      # (B, time_dim+cond_dim)
+
+        x = self.input_proj(z_t)                          # (B, hidden_dim)
+        for layer in self.layers:
+            x = layer(x, cond)                            # 조건이 매 레이어마다 주입
+        return self.output_proj(x)                        # (B, latent_dim)
 
 
 class NoiseScheduler:

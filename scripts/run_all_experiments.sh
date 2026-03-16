@@ -42,10 +42,17 @@ for i in "${!EXPERIMENTS[@]}"; do
   fi
 
   echo "--- train ---"
-  if $PYTHON $ROOT/scripts/train.py --config $RESOLVED_CFG 2>&1; then
+  if ! $PYTHON $ROOT/scripts/train.py --config $RESOLVED_CFG 2>&1; then
+    echo "[$EXP] train FAILED"
+    FAILED+=("$EXP")
+    continue
+  fi
+
+  echo "--- evaluate ---"
+  if $PYTHON $ROOT/scripts/evaluate.py --config $RESOLVED_CFG 2>&1; then
     echo "[$EXP] DONE"
   else
-    echo "[$EXP] train FAILED"
+    echo "[$EXP] evaluate FAILED"
     FAILED+=("$EXP")
   fi
 done
