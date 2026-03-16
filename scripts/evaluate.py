@@ -10,8 +10,9 @@ from src.evaluation.metrics import compute_metrics
 from src.evaluation.plots import plot_latent_umap, plot_loss_curve, plot_scatter
 from src.features.descriptors import smiles_to_descriptors
 from src.features.fingerprints import smiles_to_fp
-from src.features.graph import MolDataset
-from src.models.gnn import AttentiveFPModel
+from src.features.graph import MolDataset, SMEMolDataset
+from src.models.gnn import AttentiveFPModel, SMERGCNModel
+from src.features.graph import SME_NODE_DIM
 from src.models.mlp import FingerprintMLP
 from src.utils.config import parse_config_args
 from src.utils.io import load_checkpoint, load_json, load_numpy, resolve_run_dir, save_json
@@ -119,6 +120,28 @@ def main():
             hidden_dim=int(model_cfg.get("gnn_hidden", 200)),
             num_layers=int(model_cfg.get("gnn_layers", 3)),
             dropout=float(model_cfg.get("gnn_dropout", 0.1)),
+        )
+        is_graph = True
+
+    elif feature_type == "sme_graph":
+        if PyGDataLoader is None:
+            raise ImportError("torch-geometric is required for sme_graph mode.")
+        if model_type != "sme_rgcn":
+            raise ValueError("For sme_graph features, model.type must be 'sme_rgcn'.")
+
+        smask_type = str(feat_cfg.get("smask_type", "brics"))
+        ds = SMEMolDataset(
+            [smiles_all[i] for i in test_idx],
+            [float(y_all[i]) for i in test_idx],
+            smask_type=smask_type,
+        )
+        loader = PyGDataLoader(ds, batch_size=batch_size, shuffle=False)
+        model = SMERGCNModel(
+            in_feats=SME_NODE_DIM,
+            hidden_feats=list(model_cfg.get("sme_hidden_feats", [200, 200])),
+            ffn_hidden=int(model_cfg.get("sme_ffn_hidden", 200)),
+            rgcn_dropout=float(model_cfg.get("sme_rgcn_dropout", 0.25)),
+            ffn_dropout=float(model_cfg.get("sme_ffn_dropout", 0.25)),
         )
         is_graph = True
 
