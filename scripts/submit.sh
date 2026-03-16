@@ -11,7 +11,7 @@
 mkdir -p logs
 
 source ~/anaconda3/etc/profile.d/conda.sh
-conda activate ligand_screen
+conda activate ligand-screen
 
 # SLURM_SUBMIT_DIR이 project root인지 scripts/인지 모두 처리
 _D="${SLURM_SUBMIT_DIR:-.}"

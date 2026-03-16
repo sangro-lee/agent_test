@@ -33,7 +33,7 @@ RESOLVED="$RUN_DIR/config_resolved.yaml"
 mkdir -p logs "$RUN_DIR"
 
 source ~/anaconda3/etc/profile.d/conda.sh
-conda activate ligand_screen
+conda activate ligand-screen
 
 export PYTHONPATH=$ROOT
 cd "$ROOT"
