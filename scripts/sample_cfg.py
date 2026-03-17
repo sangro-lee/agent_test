@@ -120,7 +120,6 @@ def main():
     # ---- Score via reg_head (last linear layer of encoder) ----------------
     # Load encoder model to score sampled latents
     from src.utils.io import load_checkpoint
-    from scripts.train_diffusion import _build_model_from_cfg  # noqa: local import
 
     # Simpler: score via denoiser's stored normalization + a note
     # We need the original encoder's reg_head — load it
