@@ -181,6 +181,11 @@ def main():
         )
         plot_latent_tsne(latents, y_true, eval_dir / f"tsne_{split_name}.png", split_name=split_name)
 
+        # Save latents and SMILES for downstream use (diffusion sampling / screening)
+        np.save(run_dir / f"latents_{split_name}.npy", latents)
+        smiles_split = [smiles_all[i] for i in idx]
+        np.save(run_dir / f"smiles_{split_name}.npy", np.array(smiles_split, dtype=object))
+
         all_latents.append(latents)
         all_y_true.append(y_true)
         all_split_labels.extend([split_name] * len(y_true))

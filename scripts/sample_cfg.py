@@ -43,6 +43,10 @@ def _extra_args(parser):
     parser.add_argument("--top_k",          type=int,   default=50)
     parser.add_argument("--sampler",        type=str,   default="ddim",
                         choices=["ddim", "ddpm"])
+    parser.add_argument("--screening_latents", type=str, default=None,
+                        help="Path to .npy file of external screening latents")
+    parser.add_argument("--screening_smiles",  type=str, default=None,
+                        help="Path to .npy file of external screening SMILES (object array)")
 
 
 def main():
@@ -88,15 +92,40 @@ def main():
         c_std=torch.tensor([ckpt["c_std"]]),
     )
 
-    # ---- Load train latents for nearest-neighbor retrieval ----------------
+    # ---- Load latents for nearest-neighbor retrieval (train / val / test) ----
     df = pd.read_csv(run_dir / "cleaned_dataset.csv")
-    train_idx = load_numpy(run_dir / "splits" / "train_idx.npy")
-    smiles_all = df[cfg["data"]["smiles_col"]].astype(str).tolist()
-    smiles_train = [smiles_all[i] for i in train_idx]
+    splits_dir = run_dir / "splits"
+    train_idx = load_numpy(splits_dir / "train_idx.npy")
     y_all = df[cfg["data"]["activity_col"]].astype(float).values
     y_train = y_all[train_idx]
 
-    z_train = load_numpy(run_dir / "latents_train.npy").astype(np.float32)
+    # Build per-split pools: {split_name: (z_array, smiles_list)}
+    retrieval_pools: dict = {}
+    for split_name in ("train", "val", "test"):
+        z_path = run_dir / f"latents_{split_name}.npy"
+        s_path = run_dir / f"smiles_{split_name}.npy"
+        if z_path.exists() and s_path.exists():
+            retrieval_pools[split_name] = (
+                load_numpy(z_path).astype(np.float32),
+                list(np.load(s_path, allow_pickle=True).astype(str)),
+            )
+        else:
+            print(f"[sample_cfg] Warning: {split_name} latents not found, skipping. "
+                  f"Re-run evaluate.py to generate them.")
+
+    # Fallback: if none found, load legacy latents_train.npy
+    if not retrieval_pools:
+        smiles_all = df[cfg["data"]["smiles_col"]].astype(str).tolist()
+        smiles_train = [smiles_all[i] for i in train_idx]
+        z_fallback = load_numpy(run_dir / "latents_train.npy").astype(np.float32)
+        retrieval_pools["train"] = (z_fallback, smiles_train)
+
+    # Optional: external screening pool
+    if args.screening_latents and args.screening_smiles:
+        z_scr = np.load(args.screening_latents).astype(np.float32)
+        s_scr = list(np.load(args.screening_smiles, allow_pickle=True).astype(str))
+        retrieval_pools["screening"] = (z_scr, s_scr)
+        print(f"[sample_cfg] Loaded screening pool: {len(s_scr)} molecules")
 
     # ---- Determine target pIC50 -------------------------------------------
     target_pic50 = args.target_pic50
@@ -170,30 +199,48 @@ def main():
         print("[sample_cfg] Scores set to 0.")
         pred_batch = np.zeros(len(z_samples))
 
-    # ---- Retrieve nearest train molecules ---------------------------------
+    # ---- Retrieve nearest molecules per split / screening pool ------------
     order = np.argsort(-pred_batch)
     top_indices = order[: min(args.top_k, len(order))]
 
-    rows = []
-    for idx in top_indices:
-        pred_i = float(pred_batch[idx])
-        for smi, sim in retrieve_nearest(z_samples[idx], z_train, smiles_train, top_k=5):
-            rows.append({"smiles": smi, "pred_pIC50": pred_i, "cosine_sim": float(sim)})
-
-    candidates_df = (
-        pd.DataFrame(rows)
-        .sort_values(["pred_pIC50", "cosine_sim"], ascending=[False, False])
-        .drop_duplicates(subset=["smiles"], keep="first")
-        .head(args.top_k)
-        .reset_index(drop=True)
-    )
-
-    # ---- Save -------------------------------------------------------------
     w_tag = f"cfg_w{args.guidance_scale:.1f}"
     out_dir = Path(run_dir) / "diffusion" / w_tag
     out_dir.mkdir(parents=True, exist_ok=True)
 
     np.save(out_dir / "z_samples.npy", z_samples)
+
+    all_rows = []
+    for pool_name, (z_pool, smiles_pool) in retrieval_pools.items():
+        rows = []
+        for idx in top_indices:
+            pred_i = float(pred_batch[idx])
+            for smi, sim in retrieve_nearest(z_samples[idx], z_pool, smiles_pool, top_k=5):
+                rows.append({
+                    "smiles": smi,
+                    "pred_pIC50": pred_i,
+                    "cosine_sim": float(sim),
+                    "source": pool_name,
+                })
+
+        pool_df = (
+            pd.DataFrame(rows)
+            .sort_values(["pred_pIC50", "cosine_sim"], ascending=[False, False])
+            .drop_duplicates(subset=["smiles"], keep="first")
+            .head(args.top_k)
+            .reset_index(drop=True)
+        )
+        pool_df.to_csv(out_dir / f"top_candidates_{pool_name}.csv", index=False)
+        all_rows.append(pool_df)
+        print(f"[sample_cfg] {pool_name}: {len(pool_df)} candidates → top_candidates_{pool_name}.csv")
+
+    # Combined (all pools, deduplicated)
+    candidates_df = (
+        pd.concat(all_rows, ignore_index=True)
+        .sort_values(["pred_pIC50", "cosine_sim"], ascending=[False, False])
+        .drop_duplicates(subset=["smiles"], keep="first")
+        .head(args.top_k)
+        .reset_index(drop=True)
+    )
     candidates_df.to_csv(out_dir / "top_candidates.csv", index=False)
 
     best_pred = float(pred_batch.max()) if len(pred_batch) else float("nan")
