@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import torch
 import numpy as np
-import pandas as pd
 from pathlib import Path
 
 from src.screening.latent_opt import train_diffusion_cfg
@@ -51,12 +50,8 @@ def main():
             device = "cpu"
 
     # ---- Load data --------------------------------------------------------
-    df = pd.read_csv(run_dir / "cleaned_dataset.csv")
-    train_idx = load_numpy(run_dir / "splits" / "train_idx.npy")
-    y_all = df[cfg["data"]["activity_col"]].astype(float).values
-    y_train = y_all[train_idx]
-
     z_train = load_numpy(run_dir / "latents_train.npy").astype(np.float32)
+    y_train = load_numpy(run_dir / "y_train.npy").astype(np.float32)
     latent_dim = int(z_train.shape[1])
 
     print(f"[train_diffusion] latent_dim={latent_dim}  n_train={len(z_train)}")
