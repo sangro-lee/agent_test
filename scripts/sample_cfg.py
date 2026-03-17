@@ -43,6 +43,8 @@ def _extra_args(parser):
     parser.add_argument("--top_k",          type=int,   default=50)
     parser.add_argument("--sampler",        type=str,   default="ddim",
                         choices=["ddim", "ddpm"])
+    parser.add_argument("--T",              type=int,   default=1000,
+                        help="Diffusion steps used during training (must match checkpoint)")
     parser.add_argument("--screening_latents", type=str, default=None,
                         help="Path to .npy file of external screening latents")
     parser.add_argument("--screening_smiles",  type=str, default=None,
@@ -68,7 +70,7 @@ def main():
             device = "cpu"
 
     # ---- Load saved denoiser ----------------------------------------------
-    ckpt_path = Path(run_dir) / "diffusion" / "denoiser_cfg.pt"
+    ckpt_path = Path(run_dir) / "diffusion" / f"T{args.T}" / "denoiser_cfg.pt"
     if not ckpt_path.exists():
         raise FileNotFoundError(
             f"Denoiser not found: {ckpt_path}\n"
@@ -214,8 +216,8 @@ def main():
     order = np.argsort(-pred_batch)
     top_indices = order[: min(args.top_k, len(order))]
 
-    w_tag = f"cfg_w{args.guidance_scale:.1f}"
-    out_dir = Path(run_dir) / "diffusion" / w_tag
+    w_tag = f"cfg_w{args.guidance_scale:.1f}_{args.sampler}"
+    out_dir = Path(run_dir) / "diffusion" / f"T{args.T}" / w_tag
     out_dir.mkdir(parents=True, exist_ok=True)
 
     np.save(out_dir / "z_samples.npy", z_samples)

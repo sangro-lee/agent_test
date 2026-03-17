@@ -72,7 +72,7 @@ def main():
     z_mean, z_std, c_mean, c_std = stats
 
     # ---- Save -------------------------------------------------------------
-    out_dir = Path(run_dir) / "diffusion"
+    out_dir = Path(run_dir) / "diffusion" / f"T{args.T}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     def _ckpt(state_dict):
