@@ -223,8 +223,14 @@ def train_diffusion_cfg(
 
     null_cond = ConditionalDenoisingMLP.NULL_COND  # 0.0
 
+    import copy
+    best_loss = float("inf")
+    best_state_dict = None
+
     denoiser.train()
     for epoch in range(int(epochs)):
+        epoch_loss = 0.0
+        n_batches = 0
         for z0_batch, c_batch in loader:
             z0_batch = z0_batch.to(device_t)
             c_batch = c_batch.to(device_t).unsqueeze(1)  # (B, 1)
@@ -244,11 +250,20 @@ def train_diffusion_cfg(
             loss.backward()
             opt.step()
 
+            epoch_loss += loss.item()
+            n_batches += 1
+
+        avg_loss = epoch_loss / max(n_batches, 1)
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            best_state_dict = copy.deepcopy(denoiser.state_dict())
+
         if (epoch + 1) % 50 == 0:
-            print(f"  [diffusion cfg] epoch {epoch+1}/{epochs} loss={loss.item():.4f}")
+            print(f"  [diffusion cfg] epoch {epoch+1}/{epochs} loss={avg_loss:.4f}  best={best_loss:.4f}")
 
     denoiser.eval()
-    return denoiser, (z_mean.astype(np.float32), z_std.astype(np.float32), c_mean, c_std)
+    stats = (z_mean.astype(np.float32), z_std.astype(np.float32), c_mean, c_std)
+    return denoiser, best_state_dict, stats
 
 
 # ---------------------------------------------------------------------------

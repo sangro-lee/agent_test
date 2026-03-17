@@ -58,7 +58,7 @@ def main():
     print(f"[train_diffusion] epochs={args.diff_epochs}  T={args.T}  device={device}")
 
     # ---- Train CFG denoiser -----------------------------------------------
-    denoiser, stats = train_diffusion_cfg(
+    denoiser, best_state_dict, stats = train_diffusion_cfg(
         z_train=z_train,
         y_train=y_train,
         latent_dim=latent_dim,
@@ -74,11 +74,10 @@ def main():
     # ---- Save -------------------------------------------------------------
     out_dir = Path(run_dir) / "diffusion"
     out_dir.mkdir(parents=True, exist_ok=True)
-    save_path = out_dir / "denoiser_cfg.pt"
 
-    torch.save(
-        {
-            "state_dict": denoiser.state_dict(),
+    def _ckpt(state_dict):
+        return {
+            "state_dict": state_dict,
             "latent_dim": latent_dim,
             "time_dim": denoiser.time_dim,
             "cond_dim": denoiser.cond_dim,
@@ -87,10 +86,15 @@ def main():
             "c_mean": c_mean,
             "c_std": c_std,
             "T": args.T,
-        },
-        save_path,
-    )
-    print(f"\n[train_diffusion] saved → {save_path}")
+        }
+
+    # best loss checkpoint (used by sample_cfg.py)
+    torch.save(_ckpt(best_state_dict), out_dir / "denoiser_cfg.pt")
+    # final epoch checkpoint
+    torch.save(_ckpt(denoiser.state_dict()), out_dir / "denoiser_cfg_final.pt")
+
+    print(f"\n[train_diffusion] saved → {out_dir}/denoiser_cfg.pt (best loss)")
+    print(f"[train_diffusion] saved → {out_dir}/denoiser_cfg_final.pt (final epoch)")
 
 
 if __name__ == "__main__":
