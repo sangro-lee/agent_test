@@ -99,15 +99,23 @@ def main():
     y_all = df[cfg["data"]["activity_col"]].astype(float).values
     y_train = y_all[train_idx]
 
-    # Build per-split pools: {split_name: (z_array, smiles_list)}
+    # Build per-split pools: {split_name: (z_array, smiles_list, y_lookup)}
+    # y_lookup: {smiles: actual_pIC50} — empty dict for pools without known activity
     retrieval_pools: dict = {}
     for split_name in ("train", "val", "test"):
         z_path = run_dir / f"latents_{split_name}.npy"
         s_path = run_dir / f"smiles_{split_name}.npy"
+        y_path = run_dir / f"y_{split_name}.npy"
         if z_path.exists() and s_path.exists():
+            smiles_pool = list(np.load(s_path, allow_pickle=True).astype(str))
+            y_lookup = {}
+            if y_path.exists():
+                y_pool = np.load(y_path).astype(np.float32)
+                y_lookup = dict(zip(smiles_pool, y_pool.tolist()))
             retrieval_pools[split_name] = (
                 load_numpy(z_path).astype(np.float32),
-                list(np.load(s_path, allow_pickle=True).astype(str)),
+                smiles_pool,
+                y_lookup,
             )
         else:
             print(f"[sample_cfg] Warning: {split_name} latents not found, skipping. "
@@ -118,13 +126,13 @@ def main():
         smiles_all = df[cfg["data"]["smiles_col"]].astype(str).tolist()
         smiles_train = [smiles_all[i] for i in train_idx]
         z_fallback = load_numpy(run_dir / "latents_train.npy").astype(np.float32)
-        retrieval_pools["train"] = (z_fallback, smiles_train)
+        retrieval_pools["train"] = (z_fallback, smiles_train, {})
 
-    # Optional: external screening pool
+    # Optional: external screening pool (no actual pIC50 available)
     if args.screening_latents and args.screening_smiles:
         z_scr = np.load(args.screening_latents).astype(np.float32)
         s_scr = list(np.load(args.screening_smiles, allow_pickle=True).astype(str))
-        retrieval_pools["screening"] = (z_scr, s_scr)
+        retrieval_pools["screening"] = (z_scr, s_scr, {})
         print(f"[sample_cfg] Loaded screening pool: {len(s_scr)} molecules")
 
     # ---- Determine target pIC50 -------------------------------------------
@@ -150,7 +158,10 @@ def main():
     # Load encoder model to score sampled latents
     from src.utils.io import load_checkpoint
 
-    # Simpler: score via denoiser's stored normalization + a note
+    # One probe SMILES for building model input dimension
+    _first_pool = next(iter(retrieval_pools.values()))
+    _probe_smiles = _first_pool[1][:1]  # smiles_pool[0:1]
+
     # We need the original encoder's reg_head — load it
     try:
         from src.utils.io import load_checkpoint
@@ -165,12 +176,12 @@ def main():
         feature_type = str(feat_cfg.get("type", "fingerprint")).lower()
 
         if feature_type == "fingerprint":
-            x_probe = smiles_to_fp(smiles_train[:1],
+            x_probe = smiles_to_fp(_probe_smiles,
                 bits=int(feat_cfg.get("fp_bits", 2048)),
                 radius=int(feat_cfg.get("fp_radius", 2)),
                 use_chirality=bool(feat_cfg.get("use_chirality", False)))
             if bool(feat_cfg.get("use_descriptors", False)):
-                x_probe = np.concatenate([x_probe, smiles_to_descriptors(smiles_train[:1])], axis=1)
+                x_probe = np.concatenate([x_probe, smiles_to_descriptors(_probe_smiles)], axis=1)
             model = FingerprintMLP(input_dim=x_probe.shape[1],
                 hidden_dims=list(model_cfg.get("hidden_dims", [512, 256, 128])),
                 dropout=float(model_cfg.get("dropout", 0.2)))
@@ -210,7 +221,7 @@ def main():
     np.save(out_dir / "z_samples.npy", z_samples)
 
     all_rows = []
-    for pool_name, (z_pool, smiles_pool) in retrieval_pools.items():
+    for pool_name, (z_pool, smiles_pool, y_lookup) in retrieval_pools.items():
         rows = []
         for idx in top_indices:
             pred_i = float(pred_batch[idx])
@@ -218,6 +229,7 @@ def main():
                 rows.append({
                     "smiles": smi,
                     "pred_pIC50": pred_i,
+                    "actual_pIC50": y_lookup.get(smi, float("nan")),
                     "cosine_sim": float(sim),
                     "source": pool_name,
                 })
