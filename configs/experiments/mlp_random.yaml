@@ -15,8 +15,8 @@ features:
 
 model:
   type: "mlp"
-  latent_dim: 128
-  hidden_dims: [512, 256, 128]
+  latent_dim: 256
+  hidden_dims: [512, 256, 256]
   dropout: 0.2
   activation: "relu"
   gnn_hidden: 200

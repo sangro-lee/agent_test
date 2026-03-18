@@ -15,15 +15,15 @@ features:
 
 model:
   type: "sme_rgcn"
-  latent_dim: 128
-  hidden_dims: [512, 256, 128]
+  latent_dim: 256
+  hidden_dims: [512, 256, 256]
   dropout: 0.2
   activation: "relu"
-  gnn_hidden: 200
+  gnn_hidden: 256
   gnn_layers: 3
   gnn_dropout: 0.1
   sme_hidden_feats: [200, 200]
-  sme_ffn_hidden: 200
+  sme_ffn_hidden: 256
   sme_rgcn_dropout: 0.25
   sme_ffn_dropout: 0.25
 
