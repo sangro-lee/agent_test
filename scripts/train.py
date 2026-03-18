@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -235,6 +236,10 @@ def main():
         model = backbone
 
     model = model.to(device)
+    n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(model, file=sys.stderr, flush=True)
+    print(f"[model] trainable params: {n_params:,}", file=sys.stderr, flush=True)
+
     optimizer = Adam(
         model.parameters(),
         lr=float(tr_cfg.get("lr", 1e-3)),
