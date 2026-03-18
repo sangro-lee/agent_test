@@ -9,7 +9,7 @@ class DenoisingMLP(nn.Module):
     Unconditional denoising network.
     Input: (z_t, t_normalized) → predicted noise epsilon
     """
-    def __init__(self, latent_dim: int = 200, time_dim: int = 128, hidden_dim: int = 512):
+    def __init__(self, latent_dim: int = 128, time_dim: int = 128, hidden_dim: int = 512):
         super().__init__()
         self.latent_dim = int(latent_dim)
         self.time_dim = int(time_dim)
@@ -84,7 +84,7 @@ class ConditionalDenoisingMLP(nn.Module):
 
     def __init__(
         self,
-        latent_dim: int = 200,
+        latent_dim: int = 128,
         time_dim: int = 128,
         cond_dim: int = 128,
         hidden_dim: int = 512,

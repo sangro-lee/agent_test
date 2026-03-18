@@ -80,7 +80,7 @@ def retrieve_nearest(
 
 def train_diffusion(
     z_train,
-    latent_dim: int = 200,
+    latent_dim: int = 128,
     epochs: int = 200,
     batch_size: int = 256,
     lr: float = 2e-4,
@@ -152,7 +152,7 @@ def train_diffusion(
 def train_diffusion_cfg(
     z_train,
     y_train,                  # pIC50 values, shape (N,)
-    latent_dim: int = 200,
+    latent_dim: int = 128,
     epochs: int = 200,
     batch_size: int = 256,
     lr: float = 2e-4,
@@ -273,7 +273,7 @@ def train_diffusion_cfg(
 def sample_gradient_guidance(
     denoiser: DenoisingMLP,
     reg_head: nn.Module,
-    latent_dim: int = 200,
+    latent_dim: int = 128,
     n_samples: int = 500,
     T: int = 1000,
     guidance_scale: float = 3.0,
@@ -340,7 +340,7 @@ def sample_gradient_guidance(
 def sample_cfg(
     denoiser: ConditionalDenoisingMLP,
     target_pic50: float,          # target pIC50 to condition on (original scale)
-    latent_dim: int = 200,
+    latent_dim: int = 128,
     n_samples: int = 500,
     T: int = 1000,
     guidance_scale: float = 3.0,  # w in: eps_uncond + w*(eps_cond - eps_uncond)
