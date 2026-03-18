@@ -157,8 +157,8 @@ def train_diffusion_cfg(
     batch_size: int = 256,
     lr: float = 2e-4,
     T: int = 1000,
-    time_dim: int = 64,
-    cond_dim: int = 64,
+    time_dim: int = 128,
+    cond_dim: int = 128,
     hidden_dim: int = 512,
     p_uncond: float = 0.15,   # probability of dropping condition during training
     device: str = "cpu",

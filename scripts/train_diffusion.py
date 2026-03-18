@@ -27,6 +27,9 @@ def _extra_args(parser):
     parser.add_argument("--batch_size",  type=int, default=256)
     parser.add_argument("--lr",          type=float, default=2e-4)
     parser.add_argument("--T",           type=int, default=1000)
+    parser.add_argument("--time_dim",    type=int, default=128)
+    parser.add_argument("--cond_dim",    type=int, default=128)
+    parser.add_argument("--hidden_dim",  type=int, default=512)
     parser.add_argument("--p_uncond",    type=float, default=0.15,
                         help="Condition dropout probability during training")
 
@@ -66,6 +69,9 @@ def main():
         batch_size=args.batch_size,
         lr=args.lr,
         T=args.T,
+        time_dim=args.time_dim,
+        cond_dim=args.cond_dim,
+        hidden_dim=args.hidden_dim,
         p_uncond=args.p_uncond,
         device=device,
     )
@@ -81,6 +87,7 @@ def main():
             "latent_dim": latent_dim,
             "time_dim": denoiser.time_dim,
             "cond_dim": denoiser.cond_dim,
+            "hidden_dim": args.hidden_dim,
             "z_mean": z_mean,
             "z_std": z_std,
             "c_mean": c_mean,

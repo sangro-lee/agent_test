@@ -87,6 +87,7 @@ def main():
         latent_dim=latent_dim,
         time_dim=int(ckpt["time_dim"]),
         cond_dim=int(ckpt["cond_dim"]),
+        hidden_dim=int(ckpt.get("hidden_dim", 512)),
     )
     denoiser.load_state_dict(ckpt["state_dict"])
     denoiser.set_normalization(
