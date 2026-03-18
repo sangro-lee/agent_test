@@ -13,6 +13,7 @@ from src.features.fingerprints import smiles_to_fp
 from src.features.graph import MolDataset, SMEMolDataset, SME_NODE_DIM
 from src.models.gnn import AttentiveFPModel, SMERGCNModel
 from src.models.mlp import FingerprintMLP
+from src.models.vqc_module import VQCEncoderHead
 from src.training.scheduler import get_scheduler
 from src.training.trainer import Trainer
 from src.utils.config import parse_config_args
@@ -23,6 +24,31 @@ try:
     from torch_geometric.loader import DataLoader as PyGDataLoader
 except Exception:  # pragma: no cover
     PyGDataLoader = None
+
+
+class _VQCModel(nn.Module):
+    """Backbone (MLP/GNN/SME) + VQCEncoderHead + prediction head.
+
+    forward() returns (pred, z_vqc) matching the same interface as the
+    plain backbone models, so Trainer / evaluate / sample_cfg all work
+    unchanged.  out_layer is exposed so sample_cfg.py reg_head detection
+    finds it via hasattr(model, "out_layer").
+    """
+
+    def __init__(self, backbone: nn.Module, vqc_head: VQCEncoderHead):
+        super().__init__()
+        self.backbone = backbone
+        self.vqc_head = vqc_head
+        self.out_layer = nn.Linear(vqc_head.n_qubits, 1)
+
+    def get_latent_dim(self) -> int:
+        return self.vqc_head.n_qubits
+
+    def forward(self, x):
+        _, z = self.backbone(x)          # z: (B, backbone_latent)
+        z_vqc = self.vqc_head(z)         # z_vqc: (B, n_qubits)
+        pred = self.out_layer(z_vqc)     # (B, 1)
+        return pred.view(-1), z_vqc
 
 
 def resolve_device(device_cfg: str) -> torch.device:
@@ -100,6 +126,7 @@ def main():
     model_type = str(model_cfg.get("type", "mlp")).lower()
     batch_size = int(tr_cfg.get("batch_size", 64))
     latent_dim = int(model_cfg.get("latent_dim", 128))
+    use_vqc = bool(model_cfg.get("use_vqc", False))
 
     if feature_type == "fingerprint":
         x_all = build_fp_features(smiles_all, feat_cfg)
@@ -120,8 +147,10 @@ def main():
             raise ValueError("For fingerprint features, model.type must be 'mlp'.")
 
         hidden_dims = list(model_cfg.get("hidden_dims", [512, 256, 128]))
-        hidden_dims[-1] = latent_dim
-        model = FingerprintMLP(
+        if not use_vqc:
+            hidden_dims[-1] = latent_dim   # force backbone output = latent_dim
+        # in VQC mode: hidden_dims[-1] is the VQC input dim (keep as-is from config)
+        backbone = FingerprintMLP(
             input_dim=x_all.shape[1],
             hidden_dims=hidden_dims,
             dropout=float(model_cfg.get("dropout", 0.2)),
@@ -148,10 +177,12 @@ def main():
         pred_val_loader = make_g_loader(val_idx, shuffle=False)
         pred_test_loader = make_g_loader(test_idx, shuffle=False)
 
-        model = AttentiveFPModel(
-            in_channels=10,   # DEFAULT_NODE_DIM
-            edge_dim=6,       # DEFAULT_EDGE_DIM
-            hidden_dim=latent_dim,
+        # VQC mode: gnn_hidden = VQC input dim; non-VQC: gnn_hidden = latent_dim
+        gnn_hidden = int(model_cfg.get("gnn_hidden", 256)) if use_vqc else latent_dim
+        backbone = AttentiveFPModel(
+            in_channels=10,
+            edge_dim=6,
+            hidden_dim=gnn_hidden,
             num_layers=int(model_cfg.get("gnn_layers", 3)),
             dropout=float(model_cfg.get("gnn_dropout", 0.1)),
         )
@@ -179,10 +210,12 @@ def main():
         pred_val_loader = make_sme_loader(val_idx, shuffle=False)
         pred_test_loader = make_sme_loader(test_idx, shuffle=False)
 
-        model = SMERGCNModel(
+        # VQC mode: sme_ffn_hidden = VQC input dim; non-VQC: sme_ffn_hidden = latent_dim
+        sme_ffn = int(model_cfg.get("sme_ffn_hidden", 256)) if use_vqc else latent_dim
+        backbone = SMERGCNModel(
             in_feats=SME_NODE_DIM,
             hidden_feats=list(model_cfg.get("sme_hidden_feats", [200, 200])),
-            ffn_hidden=latent_dim,
+            ffn_hidden=sme_ffn,
             rgcn_dropout=float(model_cfg.get("sme_rgcn_dropout", 0.25)),
             ffn_dropout=float(model_cfg.get("sme_ffn_dropout", 0.25)),
         )
@@ -190,6 +223,16 @@ def main():
 
     else:
         raise ValueError(f"Unsupported features.type: {feature_type}")
+
+    if use_vqc:
+        # latent_dim = n_qubits (VQC output); backbone.get_latent_dim() = VQC input
+        vqc_head = VQCEncoderHead(
+            latent_dim=backbone.get_latent_dim(),
+            n_qubits=latent_dim,
+        )
+        model = _VQCModel(backbone, vqc_head)
+    else:
+        model = backbone
 
     model = model.to(device)
     optimizer = Adam(
