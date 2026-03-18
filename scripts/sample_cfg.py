@@ -28,6 +28,7 @@ import torch
 from pathlib import Path
 
 from src.models.diffusion import ConditionalDenoisingMLP
+from src.models.vqc_module import VQCConditionalDenoiser
 from src.screening.latent_opt import retrieve_nearest, sample_cfg
 from src.utils.config import parse_config_args
 from src.utils.io import load_numpy, resolve_run_dir
@@ -82,13 +83,21 @@ def main():
     ckpt = torch.load(ckpt_path, map_location=device)
     latent_dim = int(ckpt["latent_dim"])
     T = int(ckpt["T"])
+    model_type = ckpt.get("model_type", "mlp")
 
-    denoiser = ConditionalDenoisingMLP(
-        latent_dim=latent_dim,
-        time_dim=int(ckpt["time_dim"]),
-        cond_dim=int(ckpt["cond_dim"]),
-        hidden_dim=int(ckpt.get("hidden_dim", 512)),
-    )
+    if model_type == "vqc":
+        denoiser = VQCConditionalDenoiser(
+            latent_dim=latent_dim,
+            n_qubits=int(ckpt.get("n_qubits", latent_dim)),
+            n_layers=int(ckpt.get("n_layers", 2)),
+        )
+    else:
+        denoiser = ConditionalDenoisingMLP(
+            latent_dim=latent_dim,
+            time_dim=int(ckpt["time_dim"]),
+            cond_dim=int(ckpt["cond_dim"]),
+            hidden_dim=int(ckpt.get("hidden_dim", 512)),
+        )
     denoiser.load_state_dict(ckpt["state_dict"])
     denoiser.set_normalization(
         z_mean=torch.tensor(ckpt["z_mean"]),

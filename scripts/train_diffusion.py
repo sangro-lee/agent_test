@@ -32,6 +32,8 @@ def _extra_args(parser):
     parser.add_argument("--hidden_dim",  type=int, default=512)
     parser.add_argument("--p_uncond",    type=float, default=0.15,
                         help="Condition dropout probability during training")
+    parser.add_argument("--use_vqc",     action="store_true",
+                        help="Use VQCConditionalDenoiser instead of MLP (requires 8-dim latents)")
 
 
 def main():
@@ -61,6 +63,7 @@ def main():
     print(f"[train_diffusion] epochs={args.diff_epochs}  T={args.T}  device={device}")
 
     # ---- Train CFG denoiser -----------------------------------------------
+    model_type = "vqc" if args.use_vqc else "mlp"
     denoiser, best_state_dict, stats = train_diffusion_cfg(
         z_train=z_train,
         y_train=y_train,
@@ -73,6 +76,7 @@ def main():
         cond_dim=args.cond_dim,
         hidden_dim=args.hidden_dim,
         p_uncond=args.p_uncond,
+        model_type=model_type,
         device=device,
     )
     z_mean, z_std, c_mean, c_std = stats
@@ -82,18 +86,24 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     def _ckpt(state_dict):
-        return {
+        ckpt = {
             "state_dict": state_dict,
+            "model_type": model_type,
             "latent_dim": latent_dim,
-            "time_dim": denoiser.time_dim,
-            "cond_dim": denoiser.cond_dim,
-            "hidden_dim": args.hidden_dim,
             "z_mean": z_mean,
             "z_std": z_std,
             "c_mean": c_mean,
             "c_std": c_std,
             "T": args.T,
         }
+        if model_type == "mlp":
+            ckpt["time_dim"] = denoiser.time_dim
+            ckpt["cond_dim"] = denoiser.cond_dim
+            ckpt["hidden_dim"] = args.hidden_dim
+        else:
+            ckpt["n_qubits"] = denoiser.n_qubits
+            ckpt["n_layers"] = denoiser.n_layers
+        return ckpt
 
     # best loss checkpoint (used by sample_cfg.py)
     torch.save(_ckpt(best_state_dict), out_dir / "denoiser_cfg.pt")

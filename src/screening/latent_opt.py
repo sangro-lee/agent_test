@@ -9,6 +9,7 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.models.diffusion import ConditionalDenoisingMLP, DenoisingMLP, NoiseScheduler
+from src.models.vqc_module import VQCConditionalDenoiser
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +162,7 @@ def train_diffusion_cfg(
     cond_dim: int = 128,
     hidden_dim: int = 512,
     p_uncond: float = 0.15,   # probability of dropping condition during training
+    model_type: str = "mlp",  # "mlp" or "vqc"
     device: str = "cpu",
 ):
     """
@@ -205,12 +207,18 @@ def train_diffusion_cfg(
         drop_last=False,
     )
 
-    denoiser = ConditionalDenoisingMLP(
-        latent_dim=latent_dim,
-        time_dim=int(time_dim),
-        cond_dim=int(cond_dim),
-        hidden_dim=int(hidden_dim),
-    ).to(device_t)
+    if model_type == "vqc":
+        denoiser = VQCConditionalDenoiser(
+            latent_dim=latent_dim,
+            n_qubits=latent_dim,
+        ).to(device_t)
+    else:
+        denoiser = ConditionalDenoisingMLP(
+            latent_dim=latent_dim,
+            time_dim=int(time_dim),
+            cond_dim=int(cond_dim),
+            hidden_dim=int(hidden_dim),
+        ).to(device_t)
     denoiser.set_normalization(
         torch.tensor(z_mean, dtype=torch.float32, device=device_t),
         torch.tensor(z_std, dtype=torch.float32, device=device_t),
@@ -221,7 +229,7 @@ def train_diffusion_cfg(
     scheduler = NoiseScheduler(T=int(T), device=device_t)
     opt = torch.optim.Adam(denoiser.parameters(), lr=float(lr))
 
-    null_cond = ConditionalDenoisingMLP.NULL_COND  # 0.0
+    null_cond = VQCConditionalDenoiser.NULL_COND if model_type == "vqc" else ConditionalDenoisingMLP.NULL_COND
 
     import copy
     best_loss = float("inf")
