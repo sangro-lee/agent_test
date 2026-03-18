@@ -99,6 +99,7 @@ def main():
     feature_type = str(feat_cfg.get("type", "fingerprint")).lower()
     model_type = str(model_cfg.get("type", "mlp")).lower()
     batch_size = int(tr_cfg.get("batch_size", 64))
+    latent_dim = int(model_cfg.get("latent_dim", 128))
 
     if feature_type == "fingerprint":
         x_all = build_fp_features(smiles_all, feat_cfg)
@@ -118,9 +119,11 @@ def main():
         if model_type != "mlp":
             raise ValueError("For fingerprint features, model.type must be 'mlp'.")
 
+        hidden_dims = list(model_cfg.get("hidden_dims", [512, 256, 128]))
+        hidden_dims[-1] = latent_dim
         model = FingerprintMLP(
             input_dim=x_all.shape[1],
-            hidden_dims=list(model_cfg.get("hidden_dims", [512, 256, 128])),
+            hidden_dims=hidden_dims,
             dropout=float(model_cfg.get("dropout", 0.2)),
             activation=str(model_cfg.get("activation", "relu")),
         )
@@ -148,7 +151,7 @@ def main():
         model = AttentiveFPModel(
             in_channels=10,   # DEFAULT_NODE_DIM
             edge_dim=6,       # DEFAULT_EDGE_DIM
-            hidden_dim=int(model_cfg.get("gnn_hidden", 200)),
+            hidden_dim=latent_dim,
             num_layers=int(model_cfg.get("gnn_layers", 3)),
             dropout=float(model_cfg.get("gnn_dropout", 0.1)),
         )
@@ -179,7 +182,7 @@ def main():
         model = SMERGCNModel(
             in_feats=SME_NODE_DIM,
             hidden_feats=list(model_cfg.get("sme_hidden_feats", [200, 200])),
-            ffn_hidden=int(model_cfg.get("sme_ffn_hidden", 200)),
+            ffn_hidden=latent_dim,
             rgcn_dropout=float(model_cfg.get("sme_rgcn_dropout", 0.25)),
             ffn_dropout=float(model_cfg.get("sme_ffn_dropout", 0.25)),
         )
