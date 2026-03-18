@@ -23,7 +23,7 @@ model:
   hidden_dims: [512, 256, 256]
   dropout: 0.2
   activation: "relu"
-  sme_hidden_feats: [200, 200]
+  sme_hidden_feats: [256, 256]
   sme_ffn_hidden: 256
   sme_rgcn_dropout: 0.25
   sme_ffn_dropout: 0.25

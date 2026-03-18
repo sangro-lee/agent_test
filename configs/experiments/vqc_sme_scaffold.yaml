@@ -17,7 +17,7 @@ model:
   type: "sme_rgcn"
   use_vqc: true
   latent_dim: 8           # = n_qubits (VQC output dim)
-  sme_hidden_feats: [200, 200]
+  sme_hidden_feats: [256, 256]
   sme_ffn_hidden: 256     # SME FFN output dim = VQC input dim
   sme_rgcn_dropout: 0.25
   sme_ffn_dropout: 0.25

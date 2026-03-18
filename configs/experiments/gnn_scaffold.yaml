@@ -22,7 +22,7 @@ model:
   gnn_hidden: 256
   gnn_layers: 3
   gnn_dropout: 0.1
-  sme_hidden_feats: [200, 200]
+  sme_hidden_feats: [256, 256]
   sme_ffn_hidden: 200
   sme_rgcn_dropout: 0.25
   sme_ffn_dropout: 0.25
