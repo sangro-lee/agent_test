@@ -106,7 +106,8 @@ class HybridUNetDenoiser(nn.Module):
             self.bottleneck_dim = bottleneck_dim
 
             dev = qml.device(device_type, wires=n_qubits)
-            params_per_layer = (n_qubits * 3) + ((n_qubits - 1) * 3)
+            # Ring topology: n_qubits rotations + n_qubits entanglement pairs per layer
+            params_per_layer = (n_qubits * 3) + (n_qubits * 3)
             weight_shapes = {"theta": (params_per_layer * n_layers,)}
 
             _pi = math.pi  # capture for use inside qnode
@@ -116,9 +117,9 @@ class HybridUNetDenoiser(nn.Module):
                 # Amplitude encoding: 2^n_qubits = bottleneck_dim
                 qml.AmplitudeEmbedding(inputs, wires=range(n_qubits), normalize=False)
 
-                # Initial entanglement
-                for j in range(n_qubits - 1):
-                    qml.CNOT(wires=[j, j + 1])
+                # Initial entanglement (ring: last qubit → first qubit)
+                for j in range(n_qubits):
+                    qml.CNOT(wires=[j, (j + 1) % n_qubits])
 
                 param_idx = 0
                 for _layer in range(n_layers):
@@ -128,14 +129,15 @@ class HybridUNetDenoiser(nn.Module):
                         qml.RY(theta[param_idx + 1], wires=i)
                         qml.RZ(theta[param_idx + 2], wires=i)
                         param_idx += 3
-                    # Entanglement sub-layer
-                    for p in range(n_qubits - 1):
-                        qml.RZ(-_pi / 2,               wires=p + 1)
-                        qml.CNOT(wires=[p + 1, p])
-                        qml.RZ(theta[param_idx],       wires=p)
-                        qml.RY(theta[param_idx + 1],   wires=p + 1)
-                        qml.CNOT(wires=[p, p + 1])
-                        qml.RY(theta[param_idx + 2],   wires=p + 1)
+                    # Entanglement sub-layer (ring: n_qubits pairs, last wraps to first)
+                    for p in range(n_qubits):
+                        nxt = (p + 1) % n_qubits
+                        qml.RZ(-_pi / 2,             wires=nxt)
+                        qml.CNOT(wires=[nxt, p])
+                        qml.RZ(theta[param_idx],     wires=p)
+                        qml.RY(theta[param_idx + 1], wires=nxt)
+                        qml.CNOT(wires=[p, nxt])
+                        qml.RY(theta[param_idx + 2], wires=nxt)
                         param_idx += 3
 
                 return [qml.expval(qml.PauliZ(i)) for i in range(n_qubits)]
