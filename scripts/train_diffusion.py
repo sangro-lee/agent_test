@@ -27,8 +27,8 @@ def _extra_args(parser):
     parser.add_argument("--batch_size",  type=int, default=256)
     parser.add_argument("--lr",          type=float, default=2e-4)
     parser.add_argument("--T",           type=int, default=1000)
-    parser.add_argument("--time_dim",    type=int, default=128)
-    parser.add_argument("--cond_dim",    type=int, default=128)
+    parser.add_argument("--time_dim",    type=int, default=32)
+    parser.add_argument("--cond_dim",    type=int, default=32)
     parser.add_argument("--hidden_dim",  type=int, default=512)
     parser.add_argument("--p_uncond",      type=float, default=0.15,
                         help="Condition dropout probability during training")
@@ -85,8 +85,8 @@ def main():
     else:
         unet_dims = [int(d) for d in str(unet_dims_raw).split(",") if str(d).strip()] or None
     n_layers = args.n_layers if args.n_layers != 2 else int(diff_cfg.get("n_layers", args.n_layers))
-    time_dim = args.time_dim if args.time_dim != 128 else int(diff_cfg.get("time_dim", args.time_dim))
-    cond_dim = args.cond_dim if args.cond_dim != 128 else int(diff_cfg.get("cond_dim", args.cond_dim))
+    time_dim = args.time_dim if args.time_dim != 32 else int(diff_cfg.get("time_dim", args.time_dim))
+    cond_dim = args.cond_dim if args.cond_dim != 32 else int(diff_cfg.get("cond_dim", args.cond_dim))
 
     print(f"[train_diffusion] denoiser_type={denoiser_type}  unet_dims={unet_dims}")
     print(f"[train_diffusion] time_dim={time_dim}  cond_dim={cond_dim}")
