@@ -9,6 +9,7 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.models.diffusion import ConditionalDenoisingMLP, DenoisingMLP, NoiseScheduler
+from src.models.vqc_diffusion import HybridUNetDenoiser
 from src.models.vqc_module import VQCConditionalDenoiser
 
 
@@ -152,7 +153,7 @@ def train_diffusion(
 
 def train_diffusion_cfg(
     z_train,
-    y_train,                  # pIC50 values, shape (N,)
+    y_train,                    # pIC50 values, shape (N,)
     latent_dim: int = 128,
     epochs: int = 200,
     batch_size: int = 256,
@@ -161,8 +162,11 @@ def train_diffusion_cfg(
     time_dim: int = 128,
     cond_dim: int = 128,
     hidden_dim: int = 512,
-    p_uncond: float = 0.15,   # probability of dropping condition during training
-    model_type: str = "mlp",  # "mlp" or "vqc"
+    p_uncond: float = 0.15,     # probability of dropping condition during training
+    model_type: str = "mlp",    # "mlp" or "vqc"
+    denoiser_type: str = "mlp", # "mlp" | "unet" | "unet_vqc"
+    unet_dims: list | None = None,
+    n_layers: int = 2,
     device: str = "cpu",
 ):
     """
@@ -212,6 +216,15 @@ def train_diffusion_cfg(
             latent_dim=latent_dim,
             n_qubits=latent_dim,
         ).to(device_t)
+    elif denoiser_type in ("unet", "unet_vqc"):
+        denoiser = HybridUNetDenoiser(
+            latent_dim=latent_dim,
+            unet_dims=unet_dims,
+            n_layers=int(n_layers),
+            time_dim=int(time_dim),
+            cond_dim=int(cond_dim),
+            use_vqc=(denoiser_type == "unet_vqc"),
+        ).to(device_t)
     else:
         denoiser = ConditionalDenoisingMLP(
             latent_dim=latent_dim,
@@ -229,7 +242,7 @@ def train_diffusion_cfg(
     scheduler = NoiseScheduler(T=int(T), device=device_t)
     opt = torch.optim.Adam(denoiser.parameters(), lr=float(lr))
 
-    null_cond = VQCConditionalDenoiser.NULL_COND if model_type == "vqc" else ConditionalDenoisingMLP.NULL_COND
+    null_cond = denoiser.NULL_COND
 
     import copy
     best_loss = float("inf")

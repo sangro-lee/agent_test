@@ -30,10 +30,17 @@ def _extra_args(parser):
     parser.add_argument("--time_dim",    type=int, default=128)
     parser.add_argument("--cond_dim",    type=int, default=128)
     parser.add_argument("--hidden_dim",  type=int, default=512)
-    parser.add_argument("--p_uncond",    type=float, default=0.15,
+    parser.add_argument("--p_uncond",      type=float, default=0.15,
                         help="Condition dropout probability during training")
-    parser.add_argument("--use_vqc",     action="store_true",
-                        help="Use VQCConditionalDenoiser instead of MLP (requires 8-dim latents)")
+    parser.add_argument("--use_vqc",       action="store_true",
+                        help="(legacy) Use VQCConditionalDenoiser instead of MLP (requires 8-dim latents)")
+    parser.add_argument("--denoiser_type", type=str, default="mlp",
+                        choices=["mlp", "unet", "unet_vqc"],
+                        help="Denoiser architecture: mlp | unet | unet_vqc")
+    parser.add_argument("--unet_dims",     type=str, default="",
+                        help="Comma-separated U-Net hidden dims, e.g. '256,128,64' (default: auto)")
+    parser.add_argument("--n_layers",      type=int, default=2,
+                        help="Number of VQC layers in U-Net bottleneck (unet_vqc only)")
 
 
 def main():
@@ -62,8 +69,14 @@ def main():
     print(f"[train_diffusion] latent_dim={latent_dim}  n_train={len(z_train)}")
     print(f"[train_diffusion] epochs={args.diff_epochs}  T={args.T}  device={device}")
 
+    # ---- Resolve denoiser type -------------------------------------------
+    model_type = "vqc" if args.use_vqc else "mlp"  # legacy flag
+    denoiser_type = args.denoiser_type if not args.use_vqc else "mlp"
+    unet_dims = [int(d) for d in args.unet_dims.split(",") if d.strip()] or None
+
+    print(f"[train_diffusion] denoiser_type={denoiser_type}  unet_dims={unet_dims}")
+
     # ---- Train CFG denoiser -----------------------------------------------
-    model_type = "vqc" if args.use_vqc else "mlp"
     denoiser, best_state_dict, stats = train_diffusion_cfg(
         z_train=z_train,
         y_train=y_train,
@@ -77,6 +90,9 @@ def main():
         hidden_dim=args.hidden_dim,
         p_uncond=args.p_uncond,
         model_type=model_type,
+        denoiser_type=denoiser_type,
+        unet_dims=unet_dims,
+        n_layers=args.n_layers,
         device=device,
     )
     z_mean, z_std, c_mean, c_std = stats
@@ -89,6 +105,7 @@ def main():
         ckpt = {
             "state_dict": state_dict,
             "model_type": model_type,
+            "denoiser_type": denoiser_type,
             "latent_dim": latent_dim,
             "z_mean": z_mean,
             "z_std": z_std,
@@ -96,13 +113,18 @@ def main():
             "c_std": c_std,
             "T": args.T,
         }
-        if model_type == "mlp":
+        if model_type == "vqc":
+            ckpt["n_qubits"] = denoiser.n_qubits
+            ckpt["n_layers"] = denoiser.n_layers
+        elif denoiser_type in ("unet", "unet_vqc"):
+            ckpt["unet_dims"] = denoiser.unet_dims
+            ckpt["n_layers"] = denoiser.n_layers
+            ckpt["time_dim"] = args.time_dim
+            ckpt["cond_dim"] = args.cond_dim
+        else:  # mlp
             ckpt["time_dim"] = denoiser.time_dim
             ckpt["cond_dim"] = denoiser.cond_dim
             ckpt["hidden_dim"] = args.hidden_dim
-        else:
-            ckpt["n_qubits"] = denoiser.n_qubits
-            ckpt["n_layers"] = denoiser.n_layers
         return ckpt
 
     # best loss checkpoint (used by sample_cfg.py)

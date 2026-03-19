@@ -28,6 +28,7 @@ import torch
 from pathlib import Path
 
 from src.models.diffusion import ConditionalDenoisingMLP
+from src.models.vqc_diffusion import HybridUNetDenoiser
 from src.models.vqc_module import VQCConditionalDenoiser
 from src.screening.latent_opt import retrieve_nearest, sample_cfg
 from src.utils.config import parse_config_args
@@ -84,12 +85,22 @@ def main():
     latent_dim = int(ckpt["latent_dim"])
     T = int(ckpt["T"])
     model_type = ckpt.get("model_type", "mlp")
+    denoiser_type = ckpt.get("denoiser_type", model_type)  # fallback for old checkpoints
 
     if model_type == "vqc":
         denoiser = VQCConditionalDenoiser(
             latent_dim=latent_dim,
             n_qubits=int(ckpt.get("n_qubits", latent_dim)),
             n_layers=int(ckpt.get("n_layers", 2)),
+        )
+    elif denoiser_type in ("unet", "unet_vqc"):
+        denoiser = HybridUNetDenoiser(
+            latent_dim=latent_dim,
+            unet_dims=ckpt.get("unet_dims"),
+            n_layers=int(ckpt.get("n_layers", 2)),
+            time_dim=int(ckpt.get("time_dim", 128)),
+            cond_dim=int(ckpt.get("cond_dim", 128)),
+            use_vqc=(denoiser_type == "unet_vqc"),
         )
     else:
         denoiser = ConditionalDenoisingMLP(
