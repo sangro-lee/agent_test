@@ -4,18 +4,36 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.evaluation.metrics import compute_metrics
 from src.evaluation.plots import plot_latent_tsne, plot_loss_curve, plot_scatter
 from src.features.descriptors import smiles_to_descriptors
 from src.features.fingerprints import smiles_to_fp
-from src.features.graph import MolDataset, SMEMolDataset
+from src.features.graph import MolDataset, SMEMolDataset, SME_NODE_DIM
 from src.models.gnn import AttentiveFPModel, SMERGCNModel
-from src.features.graph import SME_NODE_DIM
 from src.models.mlp import FingerprintMLP
+from src.models.vqc_module import VQCEncoderHead
 from src.utils.config import parse_config_args
 from src.utils.io import load_checkpoint, load_json, load_numpy, resolve_run_dir, save_json
+
+
+class _VQCModel(nn.Module):
+    def __init__(self, backbone: nn.Module, vqc_head: VQCEncoderHead):
+        super().__init__()
+        self.backbone = backbone
+        self.vqc_head = vqc_head
+        self.out_layer = nn.Linear(vqc_head.n_qubits, 1)
+
+    def get_latent_dim(self) -> int:
+        return self.vqc_head.n_qubits
+
+    def forward(self, x):
+        _, z = self.backbone(x)
+        z_vqc = self.vqc_head(z)
+        pred = self.out_layer(z_vqc)
+        return pred.view(-1), z_vqc
 
 try:
     from torch_geometric.loader import DataLoader as PyGDataLoader
@@ -84,11 +102,12 @@ def main():
     feature_type = str(feat_cfg.get("type", "fingerprint")).lower()
     model_type   = str(model_cfg.get("type", "mlp")).lower()
     batch_size   = int(tr_cfg.get("batch_size", 64))
+    latent_dim   = int(model_cfg.get("latent_dim", 128))
+    use_vqc      = bool(model_cfg.get("use_vqc", False))
 
     if feature_type == "fingerprint":
         if model_type != "mlp":
             raise ValueError("For fingerprint features, model.type must be 'mlp'.")
-        # compute full fp once
         x_fp = smiles_to_fp(
             smiles_all,
             bits=int(feat_cfg.get("fp_bits", 2048)),
@@ -104,9 +123,12 @@ def main():
             y = torch.tensor(y_all[idx], dtype=torch.float32)
             return DataLoader(TensorDataset(x, y), batch_size=batch_size, shuffle=False)
 
-        model = FingerprintMLP(
+        hidden_dims = list(model_cfg.get("hidden_dims", [512, 256, 128]))
+        if not use_vqc:
+            hidden_dims[-1] = latent_dim
+        backbone = FingerprintMLP(
             input_dim=input_dim,
-            hidden_dims=list(model_cfg.get("hidden_dims", [512, 256, 128])),
+            hidden_dims=hidden_dims,
             dropout=float(model_cfg.get("dropout", 0.2)),
             activation=str(model_cfg.get("activation", "relu")),
         )
@@ -122,10 +144,11 @@ def main():
             ds = MolDataset([smiles_all[i] for i in idx], [float(y_all[i]) for i in idx])
             return PyGDataLoader(ds, batch_size=batch_size, shuffle=False)
 
-        model = AttentiveFPModel(
+        gnn_hidden = int(model_cfg.get("gnn_hidden", 256)) if use_vqc else latent_dim
+        backbone = AttentiveFPModel(
             in_channels=10,
             edge_dim=6,
-            hidden_dim=int(model_cfg.get("gnn_hidden", 200)),
+            hidden_dim=gnn_hidden,
             num_layers=int(model_cfg.get("gnn_layers", 3)),
             dropout=float(model_cfg.get("gnn_dropout", 0.1)),
         )
@@ -147,10 +170,11 @@ def main():
             )
             return PyGDataLoader(ds, batch_size=batch_size, shuffle=False)
 
-        model = SMERGCNModel(
+        sme_ffn = int(model_cfg.get("sme_ffn_hidden", 256)) if use_vqc else latent_dim
+        backbone = SMERGCNModel(
             in_feats=SME_NODE_DIM,
-            hidden_feats=list(model_cfg.get("sme_hidden_feats", [200, 200])),
-            ffn_hidden=int(model_cfg.get("sme_ffn_hidden", 200)),
+            hidden_feats=list(model_cfg.get("sme_hidden_feats", [256, 256])),
+            ffn_hidden=sme_ffn,
             rgcn_dropout=float(model_cfg.get("sme_rgcn_dropout", 0.25)),
             ffn_dropout=float(model_cfg.get("sme_ffn_dropout", 0.25)),
         )
@@ -158,6 +182,12 @@ def main():
 
     else:
         raise ValueError(f"Unsupported features.type: {feature_type}")
+
+    if use_vqc:
+        vqc_head = VQCEncoderHead(latent_dim=backbone.get_latent_dim(), n_qubits=latent_dim)
+        model = _VQCModel(backbone, vqc_head)
+    else:
+        model = backbone
 
     model = model.to(device)
     load_checkpoint(run_dir / "checkpoints" / "best.pt", model=model, map_location=device)
