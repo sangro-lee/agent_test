@@ -90,7 +90,7 @@ class HybridUNetDenoiser(nn.Module):
         self.enc_projs = nn.ModuleList()
         self.enc_conds = nn.ModuleList()
         for i in range(len(self.unet_dims)):
-            self.enc_projs.append(nn.Linear(dims[i], dims[i + 1]))
+            self.enc_projs.append(nn.Sequential(nn.Linear(dims[i], dims[i + 1]), nn.GELU()))
             self.enc_conds.append(_CondInjectionLayer(dims[i + 1], cond_embed_dim))
 
         # ── Bottleneck ───────────────────────────────────────────────────────
@@ -157,7 +157,7 @@ class HybridUNetDenoiser(nn.Module):
         for i in range(len(rev_dims)):
             in_dim  = rev_dims[i] * 2                                           # cat with skip
             out_dim = rev_dims[i + 1] if i + 1 < len(rev_dims) else self.latent_dim
-            self.dec_projs.append(nn.Linear(in_dim, out_dim))
+            self.dec_projs.append(nn.Sequential(nn.Linear(in_dim, out_dim), nn.GELU()))
             self.dec_conds.append(_CondInjectionLayer(out_dim, cond_embed_dim))
 
         # ── Output head (no activation) ─────────────────────────────────────

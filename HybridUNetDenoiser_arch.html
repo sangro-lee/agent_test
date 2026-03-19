@@ -4,279 +4,257 @@
 <meta charset="UTF-8">
 <title>HybridUNetDenoiser Architecture</title>
 <style>
-  body { font-family: 'Consolas', monospace; background: #1a1a2e; color: #e0e0e0; margin: 0; padding: 20px; }
-  h1 { text-align: center; color: #a8d8ea; font-size: 1.4em; margin-bottom: 4px; }
-  .subtitle { text-align: center; color: #888; font-size: 0.85em; margin-bottom: 30px; }
+  * { box-sizing: border-box; }
+  body { font-family: 'Consolas', monospace; background: #13131f; color: #e0e0e0; margin: 0; padding: 24px; }
+  h1 { text-align: center; color: #a8d8ea; font-size: 1.3em; margin-bottom: 2px; }
+  .subtitle { text-align: center; color: #666; font-size: 0.8em; margin-bottom: 28px; }
 
-  .container { display: flex; gap: 20px; justify-content: center; align-items: flex-start; flex-wrap: wrap; }
-  .col { display: flex; flex-direction: column; align-items: center; gap: 0; }
+  .outer { display: flex; gap: 0; justify-content: center; align-items: flex-start; }
+  .main-col { display: flex; flex-direction: column; align-items: center; }
 
-  /* Boxes */
-  .box {
-    border-radius: 8px;
-    padding: 8px 16px;
-    text-align: center;
-    font-size: 0.82em;
-    line-height: 1.5;
-    position: relative;
-  }
-  .input-box   { background: #16213e; border: 2px solid #4a90d9; width: 180px; }
-  .cond-box    { background: #1b2631; border: 2px solid #f39c12; width: 200px; }
-  .enc-box     { background: #1a3a1a; border: 2px solid #27ae60; width: 200px; }
-  .bottleneck-box { background: #2d1b3d; border: 2px dashed #9b59b6; width: 220px; }
-  .vqc-inner   { background: #3d1b5e; border: 1px solid #8e44ad; border-radius: 6px; padding: 6px 10px; font-size: 0.78em; margin-top: 6px; }
-  .dec-box     { background: #3a1a1a; border: 2px solid #e74c3c; width: 200px; }
-  .out-box     { background: #16213e; border: 2px solid #4a90d9; width: 180px; }
-  .cond-inj    { background: #2c2800; border: 1px solid #f39c12; border-radius: 4px; padding: 2px 8px; font-size: 0.75em; color: #f39c12; margin-top: 4px; display: inline-block; }
-  .skip-label  { background: #2a0000; border: 1px solid #e74c3c; border-radius: 4px; padding: 2px 8px; font-size: 0.75em; color: #e74c3c; }
-  .dim         { color: #a8d8ea; font-weight: bold; }
-  .op          { color: #bbb; font-size: 0.78em; }
+  .box { border-radius: 8px; padding: 8px 14px; text-align: center; font-size: 0.8em; line-height: 1.6; }
+  .input-row { display: flex; gap: 10px; margin-bottom: 0; }
+  .in-box  { background:#16213e; border:2px solid #4a90d9; width:130px; font-size:0.78em; padding:6px 8px; border-radius:8px; text-align:center; }
+  .cond-embed { background:#1b2631; border:2px solid #f39c12; width:300px; }
+  .enc-box { background:#1a3a1a; border:2px solid #27ae60; width:265px; }
+  .btn-box { background:#2d1b3d; border:2px dashed #9b59b6; width:265px; }
+  .vqc-inner { background:#3a1855; border:1px solid #8e44ad; border-radius:6px; padding:5px 10px; font-size:0.75em; margin-top:5px; }
+  .dec-box { background:#3a1a1a; border:2px solid #e74c3c; width:265px; }
+  .out-box { background:#16213e; border:2px solid #4a90d9; width:220px; }
 
-  /* Arrows */
-  .arrow { width: 2px; height: 20px; background: #555; margin: 0 auto; position: relative; }
-  .arrow::after { content: '▼'; position: absolute; bottom: -14px; left: 50%; transform: translateX(-50%); color: #555; font-size: 12px; }
-  .arrow-down { height: 30px; }
+  .dim  { color:#a8d8ea; font-weight:bold; }
+  .op   { color:#bbb; font-size:0.77em; }
+  .skip-label { color:#e74c3c; font-size:0.72em; border:1px solid #e74c3c; border-radius:3px; padding:1px 6px; display:inline-block; margin-top:3px; }
+  .cinj { background:#2c2500; border:1px solid #f39c12; border-radius:4px; padding:2px 8px; font-size:0.72em; color:#f39c12; display:inline-block; margin-top:4px; }
 
-  /* Skip connection panel */
-  .skip-panel {
-    background: #1a0a0a;
-    border: 1px dashed #e74c3c;
-    border-radius: 8px;
-    padding: 10px;
-    font-size: 0.78em;
-    width: 160px;
-    align-self: center;
-  }
-  .skip-entry { margin: 4px 0; display: flex; align-items: center; gap: 6px; }
-  .skip-dot { width: 8px; height: 8px; background: #e74c3c; border-radius: 50%; flex-shrink: 0; }
+  .arr { width:2px; height:18px; background:#444; margin:0 auto; position:relative; }
+  .arr::after { content:'▼'; position:absolute; bottom:-13px; left:50%; transform:translateX(-50%); color:#444; font-size:11px; }
+  .arr-lg { height:28px; }
 
-  /* Section labels */
-  .section-label {
-    writing-mode: vertical-rl;
-    text-orientation: mixed;
-    transform: rotate(180deg);
-    font-size: 0.75em;
-    color: #888;
-    letter-spacing: 2px;
-    padding: 0 4px;
-    align-self: center;
-  }
+  .sep { width:240px; border:none; border-top:1px solid #2a2a3a; margin:4px auto; }
 
-  /* Legend */
-  .legend { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; margin-top: 24px; font-size: 0.78em; }
-  .legend-item { display: flex; align-items: center; gap: 6px; }
-  .legend-dot { width: 12px; height: 12px; border-radius: 3px; }
+  .cond-box-side { background:#1b2631; border:2px solid #f39c12; border-radius:8px; padding:8px 12px; width:160px; font-size:0.74em; text-align:center; color:#f39c12; font-weight:bold; }
+  .cond-line { width:2px; background:#f39c12; margin:0 auto; }
 
-  /* separator line */
-  .sep { border: none; border-top: 1px solid #333; margin: 24px 0; }
+  .skip-panel { background:#1a0808; border:1px dashed #e74c3c; border-radius:8px; padding:10px 12px; width:148px; font-size:0.74em; }
 
-  /* condition embedding section */
-  .cond-section { display: flex; gap: 16px; justify-content: center; margin-bottom: 8px; }
-  .cond-sub { text-align: center; }
-  .plus { font-size: 1.4em; color: #f39c12; align-self: center; }
-
-  .note { background: #1e1e2e; border-left: 3px solid #4a90d9; padding: 10px 14px; font-size: 0.78em; border-radius: 0 6px 6px 0; color: #ccc; max-width: 700px; margin: 16px auto 0; }
-  .note b { color: #a8d8ea; }
+  .legend { display:flex; gap:18px; justify-content:center; flex-wrap:wrap; margin-top:20px; font-size:0.76em; }
+  .li { display:flex; align-items:center; gap:6px; }
+  .ld { width:12px; height:12px; border-radius:3px; }
+  .note { background:#1a1a2e; border-left:3px solid #4a90d9; padding:9px 13px; font-size:0.76em; border-radius:0 6px 6px 0; color:#ccc; max-width:700px; margin:12px auto 0; }
 </style>
 </head>
 <body>
 
-<h1>HybridUNetDenoiser — Forward Pass Architecture</h1>
-<div class="subtitle">denoiser_type="unet_vqc" | latent_dim=256 | unet_dims=[128,64,32] | n_qubits=5 (2⁵=32)</div>
+<h1>HybridUNetDenoiser — Forward Pass</h1>
+<div class="subtitle">latent_dim=256 | unet_dims=[128,64,32] | time_dim=128 | cond_dim=128 | use_vqc=True</div>
 
-<div class="container">
+<div class="outer">
+<div style="display:flex; gap:12px; align-items:flex-start;">
 
   <!-- MAIN COLUMN -->
-  <div class="col" style="gap:0">
+  <div class="main-col">
 
     <!-- INPUTS -->
-    <div style="display:flex; gap:12px; justify-content:center; margin-bottom:0">
-      <div class="box input-box"><span class="op">noise latent</span><br><span class="dim">z_t (B, 256)</span></div>
-      <div class="box input-box"><span class="op">timestep</span><br><span class="dim">t (B, 1)</span></div>
-      <div class="box input-box"><span class="op">condition (pIC50)</span><br><span class="dim">c (B, 1)  [or 0.0]</span></div>
+    <div class="input-row">
+      <div class="in-box"><span class="op">noisy latent</span><br><span class="dim">z_t (B,256)</span></div>
+      <div class="in-box"><span class="op">timestep</span><br><span class="dim">t (B,1)</span></div>
+      <div class="in-box"><span class="op">condition</span><br><span class="dim">c (B,1)</span></div>
     </div>
-    <div class="arrow arrow-down"></div>
+    <div class="arr arr-lg"></div>
 
     <!-- CONDITION EMBEDDING -->
-    <div class="box cond-box" style="width:340px">
-      <b>Condition Embedding</b>
-      <div style="display:flex; gap:16px; justify-content:center; margin-top:6px">
-        <div class="cond-sub">
-          <div class="op">time_mlp</div>
-          <div style="font-size:0.78em">SiLU(Lin(1→128))<br>SiLU(Lin(128→128))</div>
-          <div class="dim" style="font-size:0.78em">→ (B,128)</div>
+    <div class="box cond-embed">
+      <b style="color:#f39c12">Condition Embedding</b>
+      <div style="display:flex; gap:10px; justify-content:center; margin-top:5px; font-size:0.77em;">
+        <div>
+          <div class="op">time_mlp(t)</div>
+          <div>Lin(1→128) SiLU</div>
+          <div>Lin(128→128)</div>
+          <div class="dim">t_emb (B,128)</div>
         </div>
-        <div class="plus">+</div>
-        <div class="cond-sub">
-          <div class="op">cond_mlp</div>
-          <div style="font-size:0.78em">SiLU(Lin(1→128))<br>SiLU(Lin(128→128))</div>
-          <div class="dim" style="font-size:0.78em">→ (B,128)</div>
+        <div style="color:#f39c12;font-size:1.4em;align-self:center">⊕</div>
+        <div>
+          <div class="op">cond_mlp(c)</div>
+          <div>Lin(1→128) SiLU</div>
+          <div>Lin(128→128)</div>
+          <div class="dim">c_emb (B,128)</div>
         </div>
       </div>
-      <div style="margin-top:6px"><span class="dim">cond = cat([·, ·]) → (B, 256)</span></div>
+      <div style="margin-top:6px; border-top:1px solid #3a3a2a; padding-top:5px;">
+        cat([t_emb, c_emb]) → <span class="dim">cond (B,256)</span>
+        <div style="font-size:0.7em; color:#f39c12; margin-top:2px;">↓ 아래 7개 블록 모두에 동일하게 전달 (오른쪽 rail 참고)</div>
+      </div>
     </div>
-    <div class="arrow arrow-down"></div>
+    <div class="arr arr-lg"></div>
 
     <!-- ENCODER -->
-    <div style="font-size:0.75em; color:#27ae60; letter-spacing:2px; margin-bottom:4px">── ENCODER ──</div>
+    <div style="font-size:0.71em; color:#27ae60; letter-spacing:2px; margin-bottom:3px;">── ENCODER ──</div>
 
-    <!-- ENC BLOCK 1 -->
     <div class="box enc-box">
       <b>Enc Block 1</b>
       <div class="op">Linear(256 → 128) + GELU</div>
-      <div><span class="cond-inj">CondInj(x, cond)  AdaIN</span></div>
-      <div class="dim">h1 = (B, 128)</div>
-      <div class="skip-label" style="margin-top:4px">→ skip saved</div>
+      <div style="font-size:0.68em;color:#888;">↑ block activation (U-Net style)</div>
+      <hr class="sep">
+      <span class="cinj">CondInj(x, cond)</span>
+      <div style="font-size:0.7em;color:#999;margin-top:2px;">w,b = cond2wb(cond) | x = x + f2(GELU(w·norm(f1(x))+b))</div>
+      <hr class="sep">
+      <span class="dim">h1 = (B, 128)</span> <span class="skip-label">skip 저장</span>
     </div>
-    <div class="arrow"></div>
+    <div class="arr"></div>
 
-    <!-- ENC BLOCK 2 -->
     <div class="box enc-box">
       <b>Enc Block 2</b>
       <div class="op">Linear(128 → 64) + GELU</div>
-      <div><span class="cond-inj">CondInj(x, cond)  AdaIN</span></div>
-      <div class="dim">h2 = (B, 64)</div>
-      <div class="skip-label" style="margin-top:4px">→ skip saved</div>
+      <hr class="sep">
+      <span class="cinj">CondInj(x, cond)</span>
+      <hr class="sep">
+      <span class="dim">h2 = (B, 64)</span> <span class="skip-label">skip 저장</span>
     </div>
-    <div class="arrow"></div>
+    <div class="arr"></div>
 
-    <!-- ENC BLOCK 3 -->
     <div class="box enc-box">
       <b>Enc Block 3</b>
       <div class="op">Linear(64 → 32) + GELU</div>
-      <div><span class="cond-inj">CondInj(x, cond)  AdaIN</span></div>
-      <div class="dim">h3 = (B, 32)</div>
-      <div class="skip-label" style="margin-top:4px">→ skip saved</div>
+      <hr class="sep">
+      <span class="cinj">CondInj(x, cond)</span>
+      <hr class="sep">
+      <span class="dim">h3 = (B, 32)</span> <span class="skip-label">skip 저장</span>
     </div>
-    <div class="arrow"></div>
+    <div class="arr"></div>
 
     <!-- BOTTLENECK -->
-    <div style="font-size:0.75em; color:#9b59b6; letter-spacing:2px; margin-bottom:4px">── BOTTLENECK ──</div>
-    <div class="box bottleneck-box">
-      <b>Bottleneck</b>
-      <div class="op" style="margin-top:4px">use_vqc=True path:</div>
+    <div style="font-size:0.71em; color:#9b59b6; letter-spacing:2px; margin-bottom:3px;">── BOTTLENECK ──</div>
+    <div class="box btn-box">
+      <b style="color:#ce93d8">Bottleneck</b>
       <div class="vqc-inner">
-        <div>normalize x → (B,32)</div>
-        <div>AmplitudeEmbedding(5 qubits)</div>
-        <div style="color:#ce93d8">⚛ VQC Circuit  n_layers=2</div>
-        <div style="font-size:0.75em; color:#bbb">CNOT entanglement + RZ/RY params</div>
-        <div>measure ⟨Z_i⟩ → (B, 5)</div>
-        <div>Linear(5 → 32)</div>
+        <div style="color:#ce93d8; margin-bottom:2px;">⚛ VQC (use_vqc=True)</div>
+        <div>unit-norm(x) → AmplitudeEmbedding(5 qubits)</div>
+        <div>ring CNOT + RZ/RY layers × n_layers=2</div>
+        <div>⟨Z_i⟩ i∈[0..4] → <span class="dim">(B, 5)</span></div>
+        <div>Linear(5 → 32) → <span class="dim">(B, 32)</span></div>
       </div>
-      <div class="op" style="margin-top:6px">use_vqc=False path:</div>
-      <div style="font-size:0.78em; color:#bbb">  (identity, skip VQC block)</div>
-      <div><span class="cond-inj" style="margin-top:6px">CondInj(x, cond)  AdaIN</span></div>
-      <div class="dim" style="margin-top:4px">hb = (B, 32)</div>
+      <div style="font-size:0.7em;color:#888;margin-top:3px;">[use_vqc=False → VQC 블록 없이 바로 CondInj]</div>
+      <hr class="sep">
+      <span class="cinj">CondInj(x, cond)</span>
+      <hr class="sep">
+      <span class="dim">hb = (B, 32)</span>
     </div>
-    <div class="arrow"></div>
+    <div class="arr"></div>
 
     <!-- DECODER -->
-    <div style="font-size:0.75em; color:#e74c3c; letter-spacing:2px; margin-bottom:4px">── DECODER ──</div>
+    <div style="font-size:0.71em; color:#e74c3c; letter-spacing:2px; margin-bottom:3px;">── DECODER ──</div>
 
-    <!-- DEC BLOCK 1 -->
     <div class="box dec-box">
       <b>Dec Block 1</b>
-      <div class="op">cat([hb, <span style="color:#e74c3c">h3_skip</span>]) → (B, 64)</div>
+      <div class="op">cat([hb<span style="color:#a8d8ea">(32)</span>, <span style="color:#e74c3c">h3(32)</span>]) → (B, 64)</div>
       <div class="op">Linear(64 → 64) + GELU</div>
-      <div><span class="cond-inj">CondInj(x, cond)  AdaIN</span></div>
-      <div class="dim">→ (B, 64)</div>
+      <hr class="sep">
+      <span class="cinj">CondInj(x, cond)</span>
+      <hr class="sep">
+      <span class="dim">→ (B, 64)</span>
     </div>
-    <div class="arrow"></div>
+    <div class="arr"></div>
 
-    <!-- DEC BLOCK 2 -->
     <div class="box dec-box">
       <b>Dec Block 2</b>
-      <div class="op">cat([·, <span style="color:#e74c3c">h2_skip</span>]) → (B, 128)</div>
+      <div class="op">cat([·<span style="color:#a8d8ea">(64)</span>, <span style="color:#e74c3c">h2(64)</span>]) → (B, 128)</div>
       <div class="op">Linear(128 → 128) + GELU</div>
-      <div><span class="cond-inj">CondInj(x, cond)  AdaIN</span></div>
-      <div class="dim">→ (B, 128)</div>
+      <hr class="sep">
+      <span class="cinj">CondInj(x, cond)</span>
+      <hr class="sep">
+      <span class="dim">→ (B, 128)</span>
     </div>
-    <div class="arrow"></div>
+    <div class="arr"></div>
 
-    <!-- DEC BLOCK 3 -->
     <div class="box dec-box">
       <b>Dec Block 3</b>
-      <div class="op">cat([·, <span style="color:#e74c3c">h1_skip</span>]) → (B, 256)</div>
+      <div class="op">cat([·<span style="color:#a8d8ea">(128)</span>, <span style="color:#e74c3c">h1(128)</span>]) → (B, 256)</div>
       <div class="op">Linear(256 → 256) + GELU</div>
-      <div><span class="cond-inj">CondInj(x, cond)  AdaIN</span></div>
-      <div class="dim">→ (B, 256)</div>
+      <hr class="sep">
+      <span class="cinj">CondInj(x, cond)</span>
+      <hr class="sep">
+      <span class="dim">→ (B, 256)</span>
     </div>
-    <div class="arrow"></div>
+    <div class="arr"></div>
 
-    <!-- OUTPUT -->
+    <!-- OUTPUT HEAD -->
     <div class="box out-box">
       <b>Output Head</b>
       <div class="op">Linear(256 → 256)</div>
-      <div class="op">(no activation)</div>
-      <div class="dim">ε̂ = (B, 256)</div>
+      <div style="font-size:0.7em;color:#888;">(no activation · no CondInj)</div>
+      <div class="dim" style="margin-top:4px;">ε̂ = (B, 256)</div>
     </div>
 
+  </div><!-- end main col -->
+
+  <!-- COND RAIL -->
+  <div style="display:flex; flex-direction:column; align-items:flex-start; padding-top:320px; margin-left:6px;">
+    <div class="cond-box-side">
+      cond (B,256)<br>
+      <span style="font-size:0.78em; color:#ccc; font-weight:normal;">7개 블록 모두<br>동일하게 전달</span>
+    </div>
+    <!-- tick marks per block -->
+    <div style="display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:center; height:90px;">
+        <div class="cond-line" style="height:90px;width:2px;"></div>
+        <span style="font-size:0.67em;color:#f39c12;margin-left:4px;">→ Enc 1</span>
+      </div>
+      <div style="display:flex; align-items:center; height:75px;">
+        <div class="cond-line" style="height:75px;width:2px;"></div>
+        <span style="font-size:0.67em;color:#f39c12;margin-left:4px;">→ Enc 2</span>
+      </div>
+      <div style="display:flex; align-items:center; height:75px;">
+        <div class="cond-line" style="height:75px;width:2px;"></div>
+        <span style="font-size:0.67em;color:#f39c12;margin-left:4px;">→ Enc 3</span>
+      </div>
+      <div style="display:flex; align-items:center; height:118px;">
+        <div class="cond-line" style="height:118px;width:2px;"></div>
+        <span style="font-size:0.67em;color:#f39c12;margin-left:4px;">→ Bottleneck</span>
+      </div>
+      <div style="display:flex; align-items:center; height:83px;">
+        <div class="cond-line" style="height:83px;width:2px;"></div>
+        <span style="font-size:0.67em;color:#f39c12;margin-left:4px;">→ Dec 1</span>
+      </div>
+      <div style="display:flex; align-items:center; height:76px;">
+        <div class="cond-line" style="height:76px;width:2px;"></div>
+        <span style="font-size:0.67em;color:#f39c12;margin-left:4px;">→ Dec 2</span>
+      </div>
+      <div style="display:flex; align-items:center; height:76px;">
+        <div class="cond-line" style="height:76px;width:2px;"></div>
+        <span style="font-size:0.67em;color:#f39c12;margin-left:4px;">→ Dec 3</span>
+      </div>
+    </div>
   </div>
 
-  <!-- SKIP CONNECTIONS PANEL -->
-  <div style="display:flex; flex-direction:column; justify-content:center; gap:12px; margin-top:120px">
-    <div class="skip-panel">
-      <div style="color:#e74c3c; font-weight:bold; margin-bottom:8px">Skip Connections</div>
-      <div class="skip-entry"><div class="skip-dot"></div><span>h1 (B,128) → Dec Block 3</span></div>
-      <div class="skip-entry"><div class="skip-dot"></div><span>h2 (B,64)  → Dec Block 2</span></div>
-      <div class="skip-entry"><div class="skip-dot"></div><span>h3 (B,32)  → Dec Block 1</span></div>
-      <div style="margin-top:10px; color:#888; font-size:0.85em">
-        저장 순서: [h1,h2,h3]<br>
-        사용 순서: reversed → h3,h2,h1
-      </div>
-    </div>
-
-    <div class="skip-panel" style="border-color:#f39c12">
-      <div style="color:#f39c12; font-weight:bold; margin-bottom:8px">CondInj (AdaIN)</div>
-      <div style="color:#ccc; font-size:0.85em">
-        cond → Linear → (w, b)<br>
-        out = w ⊙ norm(x) + b<br><br>
-        <span style="color:#aaa">적용 위치 (총 7회):</span><br>
-        · Enc Block 1, 2, 3<br>
-        · Bottleneck<br>
-        · Dec Block 1, 2, 3
-      </div>
-    </div>
-
-    <div class="skip-panel" style="border-color:#4a90d9">
-      <div style="color:#4a90d9; font-weight:bold; margin-bottom:8px">CFG (inference only)</div>
-      <div style="color:#ccc; font-size:0.85em">
-        ε_cond   = model(z_t, t, c)<br>
-        ε_uncond = model(z_t, t, 0.0)<br><br>
-        ε_guided = ε_uncond<br>
-        &nbsp;&nbsp;+ w · (ε_cond − ε_uncond)<br><br>
-        <span style="color:#aaa">↑ CondInj와 별개</span>
-      </div>
-    </div>
+  <!-- SKIP PANEL -->
+  <div class="skip-panel" style="margin-top:450px; margin-left:10px;">
+    <div style="color:#e74c3c; font-weight:bold; margin-bottom:8px;">Skip Connections</div>
+    <div style="margin:4px 0;">h1 (B,128) → Dec 3</div>
+    <div style="margin:4px 0;">h2 (B,64)  → Dec 2</div>
+    <div style="margin:4px 0;">h3 (B,32)  → Dec 1</div>
+    <div style="margin-top:8px;color:#888;font-size:0.87em;">저장: [h1,h2,h3]<br>사용: reversed<br>→ h3, h2, h1</div>
   </div>
 
-</div>
-
-<hr class="sep">
+</div><!-- flex row -->
+</div><!-- outer -->
 
 <div class="note">
-  <b>차원 흐름 요약</b><br>
-  z_t(B,256) → Enc1→ (B,128) → Enc2→ (B,64) → Enc3→ (B,32)<br>
-  → Bottleneck [VQC: 32→5qubits→5→32 or identity] → (B,32)<br>
-  → Dec1: cat(32+32)=64 → Linear→ (B,64)<br>
-  → Dec2: cat(64+64)=128 → Linear→ (B,128)<br>
-  → Dec3: cat(128+128)=256 → Linear→ (B,256)<br>
-  → out_head → <b>ε̂(B,256)</b>
+  <b>CondInj (AdaIN) 내부:</b> cond(B,256) → cond2wb: Linear(256 → dim×2) → w(B,dim), b(B,dim) |
+  h = LayerNorm(f1(x)) | h = w·h + b | return <b>x + f2(GELU(h))</b> — x 차원 불변, residual<br>
+  <span style="color:#aaa;">※ GELU 두 종류: ① 각 블록 projection(Linear→GELU) — U-Net block activation, 비선형성 부여 | ② CondInj 내부(w·norm(x)+b 에 GELU) — conditioning transform, 별개 역할</span>
 </div>
-
-<div class="note" style="margin-top:8px">
-  <b>denoiser_type별 차이</b><br>
-  &nbsp;• <span style="color:#27ae60">mlp</span>: ConditionalDenoisingMLP (flat, 6×Linear+CondInj, skip 없음)<br>
-  &nbsp;• <span style="color:#e74c3c">unet</span>: HybridUNetDenoiser(use_vqc=<b>False</b>) — bottleneck=CondInj only<br>
-  &nbsp;• <span style="color:#9b59b6">unet_vqc</span>: HybridUNetDenoiser(use_vqc=<b>True</b>) — bottleneck에 VQC 삽입
+<div class="note" style="margin-top:5px;">
+  <b>Output Head:</b> Dec Block 3 출력 (B,256) → <b>Linear(256→256), activation 없음</b> → ε̂(B,256).
+  CondInj 없음. 최종 projection layer (ConditionalDenoisingMLP의 output_proj와 동일한 역할).
 </div>
 
 <div class="legend">
-  <div class="legend-item"><div class="legend-dot" style="background:#4a90d9"></div>Input / Output</div>
-  <div class="legend-item"><div class="legend-dot" style="background:#f39c12"></div>Condition Embedding + CondInj (AdaIN)</div>
-  <div class="legend-item"><div class="legend-dot" style="background:#27ae60"></div>Encoder Blocks</div>
-  <div class="legend-item"><div class="legend-dot" style="background:#9b59b6"></div>Bottleneck (VQC or Classical)</div>
-  <div class="legend-item"><div class="legend-dot" style="background:#e74c3c"></div>Decoder Blocks + Skip Concat</div>
+  <div class="li"><div class="ld" style="background:#4a90d9"></div>Input / Output</div>
+  <div class="li"><div class="ld" style="background:#f39c12"></div>Condition Embedding (→ 전 블록 공유)</div>
+  <div class="li"><div class="ld" style="background:#27ae60"></div>Encoder</div>
+  <div class="li"><div class="ld" style="background:#9b59b6"></div>Bottleneck (VQC / Classical)</div>
+  <div class="li"><div class="ld" style="background:#e74c3c"></div>Decoder + Skip Cat</div>
 </div>
 
 </body>
