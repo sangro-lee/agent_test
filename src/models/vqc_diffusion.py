@@ -44,9 +44,9 @@ class HybridUNetDenoiser(nn.Module):
 
     Args:
         latent_dim:   Dimension of the latent vectors (input/output).
-        unet_dims:    Hidden dims of the U-Net encoder, e.g. [256, 128, 64].
+        unet_dims:    Hidden dims of the U-Net encoder, e.g. [128, 64, 32].
                       The last element is the bottleneck dim (must be a power
-                      of 2 when use_vqc=True).
+                      of 2 when use_vqc=True, e.g. 32 → 5 qubits).
         n_layers:     Number of parameterized VQC layers (ignored if use_vqc=False).
         time_dim:     Timestep embedding size.
         cond_dim:     Condition (pIC50) embedding size.
@@ -68,7 +68,7 @@ class HybridUNetDenoiser(nn.Module):
     ):
         super().__init__()
         if unet_dims is None:
-            unet_dims = [256, 128, 64]
+            unet_dims = [128, 64, 32]
 
         self.latent_dim = int(latent_dim)
         self.unet_dims = [int(d) for d in unet_dims]

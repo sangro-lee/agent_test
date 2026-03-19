@@ -69,10 +69,22 @@ def main():
     print(f"[train_diffusion] latent_dim={latent_dim}  n_train={len(z_train)}")
     print(f"[train_diffusion] epochs={args.diff_epochs}  T={args.T}  device={device}")
 
-    # ---- Resolve denoiser type -------------------------------------------
+    # ---- Resolve denoiser type (config < CLI) ----------------------------
+    diff_cfg = cfg.get("diffusion", {})
     model_type = "vqc" if args.use_vqc else "mlp"  # legacy flag
-    denoiser_type = args.denoiser_type if not args.use_vqc else "mlp"
-    unet_dims = [int(d) for d in args.unet_dims.split(",") if d.strip()] or None
+    denoiser_type = (
+        args.denoiser_type
+        if args.denoiser_type != "mlp" or args.use_vqc
+        else str(diff_cfg.get("denoiser_type", "mlp"))
+    )
+    if args.use_vqc:
+        denoiser_type = "mlp"  # legacy --use_vqc maps to old VQCConditionalDenoiser
+    unet_dims_raw = args.unet_dims or str(diff_cfg.get("unet_dims", ""))
+    if isinstance(unet_dims_raw, list):
+        unet_dims = [int(d) for d in unet_dims_raw] or None
+    else:
+        unet_dims = [int(d) for d in str(unet_dims_raw).split(",") if str(d).strip()] or None
+    n_layers = args.n_layers if args.n_layers != 2 else int(diff_cfg.get("n_layers", args.n_layers))
 
     print(f"[train_diffusion] denoiser_type={denoiser_type}  unet_dims={unet_dims}")
 
@@ -92,7 +104,7 @@ def main():
         model_type=model_type,
         denoiser_type=denoiser_type,
         unet_dims=unet_dims,
-        n_layers=args.n_layers,
+        n_layers=n_layers,
         device=device,
     )
     z_mean, z_std, c_mean, c_std = stats
