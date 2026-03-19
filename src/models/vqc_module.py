@@ -196,19 +196,25 @@ class VQCEncoderHead(nn.Module):
 
         self.vqc = qml.qnn.TorchLayer(circuit, weight_shapes)
 
+        # Per-qubit affine post-processing: delta1 * x + delta2
+        # To disable, comment out the two lines below and the corresponding line in forward()
+        self.delta1 = nn.Parameter(torch.ones(n_qubits))
+        self.delta2 = nn.Parameter(torch.zeros(n_qubits))
+
     def forward(self, z: torch.Tensor) -> torch.Tensor:
         """
         Args:
             z: (B, latent_dim)
         Returns:
-            out: (B, n_qubits) in [-1, 1]^n_qubits
+            out: (B, n_qubits)
         """
         x = self.dim_adapter(z).double()
         x = torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
         norms = x.pow(2).sum(dim=-1, keepdim=True).sqrt().clamp_min(1e-12)
         x = x / norms
-        out = self.vqc(x)   # (B, n_qubits)
-        return out.float()
+        out = self.vqc(x).float()   # (B, n_qubits) in [-1, 1]^n_qubits
+        out = self.delta1 * out + self.delta2  # per-qubit affine; comment out to disable
+        return out
 
 
 class VQCConditionalDenoiser(nn.Module):
