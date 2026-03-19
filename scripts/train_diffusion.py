@@ -85,8 +85,11 @@ def main():
     else:
         unet_dims = [int(d) for d in str(unet_dims_raw).split(",") if str(d).strip()] or None
     n_layers = args.n_layers if args.n_layers != 2 else int(diff_cfg.get("n_layers", args.n_layers))
+    time_dim = args.time_dim if args.time_dim != 128 else int(diff_cfg.get("time_dim", args.time_dim))
+    cond_dim = args.cond_dim if args.cond_dim != 128 else int(diff_cfg.get("cond_dim", args.cond_dim))
 
     print(f"[train_diffusion] denoiser_type={denoiser_type}  unet_dims={unet_dims}")
+    print(f"[train_diffusion] time_dim={time_dim}  cond_dim={cond_dim}")
 
     # ---- Train CFG denoiser -----------------------------------------------
     denoiser, best_state_dict, stats = train_diffusion_cfg(
@@ -97,8 +100,8 @@ def main():
         batch_size=args.batch_size,
         lr=args.lr,
         T=args.T,
-        time_dim=args.time_dim,
-        cond_dim=args.cond_dim,
+        time_dim=time_dim,
+        cond_dim=cond_dim,
         hidden_dim=args.hidden_dim,
         p_uncond=args.p_uncond,
         model_type=model_type,
@@ -131,8 +134,8 @@ def main():
         elif denoiser_type in ("unet", "unet_vqc"):
             ckpt["unet_dims"] = denoiser.unet_dims
             ckpt["n_layers"] = denoiser.n_layers
-            ckpt["time_dim"] = args.time_dim
-            ckpt["cond_dim"] = args.cond_dim
+            ckpt["time_dim"] = time_dim
+            ckpt["cond_dim"] = cond_dim
         else:  # mlp
             ckpt["time_dim"] = denoiser.time_dim
             ckpt["cond_dim"] = denoiser.cond_dim
