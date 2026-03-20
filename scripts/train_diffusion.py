@@ -79,11 +79,15 @@ def main():
     )
     if args.use_vqc:
         denoiser_type = "mlp"  # legacy --use_vqc maps to old VQCConditionalDenoiser
-    unet_dims_raw = args.unet_dims or str(diff_cfg.get("unet_dims", ""))
-    if isinstance(unet_dims_raw, list):
-        unet_dims = [int(d) for d in unet_dims_raw] or None
+    _cfg_dims = diff_cfg.get("unet_dims", None)
+    if args.unet_dims:
+        unet_dims = [int(d) for d in args.unet_dims.split(",") if d.strip()] or None
+    elif isinstance(_cfg_dims, list):
+        unet_dims = [int(d) for d in _cfg_dims] or None
+    elif _cfg_dims:
+        unet_dims = [int(d) for d in str(_cfg_dims).split(",") if d.strip()] or None
     else:
-        unet_dims = [int(d) for d in str(unet_dims_raw).split(",") if str(d).strip()] or None
+        unet_dims = None
     n_layers = args.n_layers if args.n_layers != 2 else int(diff_cfg.get("n_layers", args.n_layers))
     time_dim = args.time_dim if args.time_dim != 32 else int(diff_cfg.get("time_dim", args.time_dim))
     cond_dim = args.cond_dim if args.cond_dim != 32 else int(diff_cfg.get("cond_dim", args.cond_dim))
