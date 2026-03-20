@@ -50,7 +50,7 @@ screening:
 
 diffusion:
   denoiser_type: "unet_vqc"   # HybridUNetDenoiser, VQC bottleneck
-  unet_dims: [128, 64, 32]    # 256→128→64→32, bottleneck=32 → 5 qubits (2^5=32)
+  unet_dims: [512, 32]        # 256→512→32, bottleneck=32 → 5 qubits (2^5=32)
   n_layers: 2                 # VQC circuit layers
   time_dim: 32    # timestep embedding dim
   cond_dim: 32    # condition (pIC50) embedding dim

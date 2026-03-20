@@ -50,7 +50,7 @@ screening:
 
 diffusion:
   denoiser_type: "unet"       # HybridUNetDenoiser, classical bottleneck
-  unet_dims: [128, 64, 32]    # 256→128→64→32, bottleneck=32
+  unet_dims: [512, 256]       # 256→512→256, bottleneck=256
   n_layers: 2
   time_dim: 32    # timestep embedding dim
   cond_dim: 32    # condition (pIC50) embedding dim
