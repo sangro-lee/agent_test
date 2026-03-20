@@ -9,11 +9,11 @@
 #SBATCH -e ./logs/XXX_JOB.e%j
 
 EXP="XXX_EXP"
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 RUN_DIR="$ROOT/outputs/runs/${EXP}"
 RESOLVED="$RUN_DIR/config_resolved.yaml"
 
-mkdir -p logs "$RUN_DIR"
+mkdir -p "$ROOT/logs" "$RUN_DIR"
 
 source ~/anaconda3/etc/profile.d/conda.sh
 conda activate ligand-screen

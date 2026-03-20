@@ -9,6 +9,7 @@ TS=(1000)
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TEMPLATE="$ROOT/scripts/submit_train_diffusion.sh"
 mkdir -p "$ROOT/logs"
+cd "$ROOT"   # sbatch는 ROOT에서 실행 → SLURM_SUBMIT_DIR=ROOT
 
 for EXP in "${EXPS[@]}"; do
     for EP in "${EPOCHS[@]}"; do
