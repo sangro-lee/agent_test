@@ -254,7 +254,7 @@ class AngleVQCDenoiser(nn.Module):
             cat([z_t, t_emb, c_emb]) → pre_proj → tanh → (B, D)  ← angles in [-1,1]
             VQC: AngleEmbedding(π * x, RY) + n_layers × (RZY + ring CNOT)
             [expval(Z_i)] → (B, D)
-            post_proj: Linear(D → D) → ε̂(B, D)
+            post_affine: δ1 * q_out + δ2 → ε̂(B, D)  (per-dim scale+bias)
     """
 
     NULL_COND = 0.0
@@ -323,8 +323,10 @@ class AngleVQCDenoiser(nn.Module):
 
         self.vqc = qml.qnn.TorchLayer(vqc_circuit, weight_shapes)
 
-        # ── Post-projection: VQC measurements → noise prediction ─────────
-        self.post_proj = nn.Linear(n_qubits, self.latent_dim)
+        # ── Post-affine: δ1 * measurement + δ2  (per-dimension) ────────────
+        # Simpler than Linear(D→D): respects qubit independence, 2D params vs D²
+        self.post_scale = nn.Parameter(torch.ones(self.latent_dim))
+        self.post_bias  = nn.Parameter(torch.zeros(self.latent_dim))
 
         # ── Normalization buffers ─────────────────────────────────────────
         self.register_buffer("z_mean", torch.zeros(self.latent_dim), persistent=True)
@@ -362,4 +364,4 @@ class AngleVQCDenoiser(nn.Module):
         # VQC expects float64 for numerical stability
         q_out = self.vqc(x.double()).float()              # (B, n_qubits)
 
-        return self.post_proj(q_out)                      # (B, latent_dim)
+        return self.post_scale * q_out + self.post_bias   # (B, latent_dim)
