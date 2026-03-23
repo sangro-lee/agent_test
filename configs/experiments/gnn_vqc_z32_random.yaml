@@ -6,18 +6,22 @@ data:
   unit_col: null
 
 features:
-  type: "fingerprint"
+  type: "graph"
   fp_bits: 2048
   fp_radius: 2
   use_chirality: false
   use_descriptors: false
+  smask_type: "brics"
 
 model:
-  type: "mlp"
-  latent_dim: 16
+  type: "gnn"
+  latent_dim: 32
   hidden_dims: [256, 128, 64]
   dropout: 0.2
   activation: "relu"
+  gnn_hidden: 128
+  gnn_layers: 3
+  gnn_dropout: 0.1
 
 training:
   epochs: 100
@@ -41,7 +45,7 @@ screening:
   score_col: "pred_pIC50"
 
 diffusion:
-  denoiser_type: "vqc_angle   # AngleVQCDenoiser, 16 qubits
+  denoiser_type: "vqc_angle"   # AngleVQCDenoiser, 32 qubits
   n_layers: 2
   time_dim: 32
   cond_dim: 32
