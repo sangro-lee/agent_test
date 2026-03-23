@@ -237,3 +237,129 @@ class HybridUNetDenoiser(nn.Module):
             x = cond_layer(x, cond)
 
         return self.out_head(x)                         # (B, latent_dim)
+
+
+class AngleVQCDenoiser(nn.Module):
+    """
+    Pure VQC denoiser using angle embedding for small-latent diffusion.
+
+    n_qubits = latent_dim (one qubit per feature dimension).
+    No amplitude embedding — uses RY angle encoding, so latent_dim can be
+    any integer (no power-of-2 constraint).
+
+    Forward path:
+        z_t(B, D), t(B,1), c(B,1)
+            time_mlp(t) → t_emb(B, time_dim)
+            cond_mlp(c) → c_emb(B, cond_dim)
+            cat([z_t, t_emb, c_emb]) → pre_proj → tanh → (B, D)  ← angles in [-1,1]
+            VQC: AngleEmbedding(π * x, RY) + n_layers × (RZY + ring CNOT)
+            [expval(Z_i)] → (B, D)
+            post_proj: Linear(D → D) → ε̂(B, D)
+    """
+
+    NULL_COND = 0.0
+
+    def __init__(
+        self,
+        latent_dim:  int = 8,
+        n_layers:    int = 2,
+        time_dim:    int = 32,
+        cond_dim:    int = 32,
+        device_type: str = "default.qubit",
+    ):
+        super().__init__()
+        self.latent_dim = int(latent_dim)
+        self.n_layers   = int(n_layers)
+        self.time_dim   = int(time_dim)
+        self.cond_dim   = int(cond_dim)
+
+        n_qubits = self.latent_dim
+
+        # ── Classical conditioning ────────────────────────────────────────
+        self.time_mlp = nn.Sequential(
+            nn.Linear(1, time_dim), nn.SiLU(), nn.Linear(time_dim, time_dim)
+        )
+        self.cond_mlp = nn.Sequential(
+            nn.Linear(1, cond_dim), nn.SiLU(), nn.Linear(cond_dim, cond_dim)
+        )
+
+        # ── Pre-projection: (z_t ‖ t_emb ‖ c_emb) → latent_dim ─────────
+        self.pre_proj = nn.Sequential(
+            nn.Linear(n_qubits + time_dim + cond_dim, n_qubits),
+            nn.Tanh(),   # bound to (-1, 1) → angles π*x ∈ (-π, π)
+        )
+
+        # ── VQC (angle embedding) ────────────────────────────────────────
+        _pi = math.pi
+        dev = qml.device(device_type, wires=n_qubits)
+        params_per_layer = n_qubits * 3 + n_qubits * 3   # rot + entangle
+        weight_shapes = {"theta": (params_per_layer * n_layers,)}
+
+        @qml.qnode(dev, interface="torch", diff_method="backprop")
+        def vqc_circuit(inputs, theta):
+            # Angle encoding: RY(π * x_i) per qubit
+            qml.AngleEmbedding(inputs * _pi, wires=range(n_qubits), rotation="Y")
+
+            param_idx = 0
+            for _layer in range(n_layers):
+                # Rotation sub-layer
+                for i in range(n_qubits):
+                    qml.RZ(theta[param_idx],     wires=i)
+                    qml.RY(theta[param_idx + 1], wires=i)
+                    qml.RZ(theta[param_idx + 2], wires=i)
+                    param_idx += 3
+                # Ring entanglement
+                for p in range(n_qubits):
+                    nxt = (p + 1) % n_qubits
+                    qml.RZ(-_pi / 2,             wires=nxt)
+                    qml.CNOT(wires=[nxt, p])
+                    qml.RZ(theta[param_idx],     wires=p)
+                    qml.RY(theta[param_idx + 1], wires=nxt)
+                    qml.CNOT(wires=[p, nxt])
+                    qml.RY(theta[param_idx + 2], wires=nxt)
+                    param_idx += 3
+
+            return [qml.expval(qml.PauliZ(i)) for i in range(n_qubits)]
+
+        self.vqc = qml.qnn.TorchLayer(vqc_circuit, weight_shapes)
+
+        # ── Post-projection: VQC measurements → noise prediction ─────────
+        self.post_proj = nn.Linear(n_qubits, self.latent_dim)
+
+        # ── Normalization buffers ─────────────────────────────────────────
+        self.register_buffer("z_mean", torch.zeros(self.latent_dim), persistent=True)
+        self.register_buffer("z_std",  torch.ones(self.latent_dim),  persistent=True)
+        self.register_buffer("c_mean", torch.zeros(1),               persistent=True)
+        self.register_buffer("c_std",  torch.ones(1),                persistent=True)
+
+    def set_normalization(self, z_mean, z_std, c_mean=None, c_std=None):
+        self.z_mean.copy_(z_mean.detach())
+        self.z_std.copy_(z_std.detach())
+        if c_mean is not None:
+            self.c_mean.copy_(c_mean.detach().view(1))
+        if c_std is not None:
+            self.c_std.copy_(c_std.detach().view(1))
+
+    def forward(self, z_t: torch.Tensor, t: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            z_t: (B, latent_dim)
+            t:   (B,) or (B, 1)  normalized timestep in [0, 1]
+            c:   (B, 1)          normalized pIC50; use NULL_COND for unconditional
+        Returns:
+            eps_pred: (B, latent_dim)
+        """
+        if t.dim() == 1:
+            t = t.unsqueeze(1)
+        if c.dim() == 1:
+            c = c.unsqueeze(1)
+
+        t_emb = self.time_mlp(t)                          # (B, time_dim)
+        c_emb = self.cond_mlp(c)                          # (B, cond_dim)
+
+        x = self.pre_proj(torch.cat([z_t, t_emb, c_emb], dim=-1))  # (B, n_qubits), tanh
+
+        # VQC expects float64 for numerical stability
+        q_out = self.vqc(x.double()).float()              # (B, n_qubits)
+
+        return self.post_proj(q_out)                      # (B, latent_dim)

@@ -9,7 +9,7 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.models.diffusion import ConditionalDenoisingMLP, DenoisingMLP, NoiseScheduler
-from src.models.vqc_diffusion import HybridUNetDenoiser
+from src.models.vqc_diffusion import AngleVQCDenoiser, HybridUNetDenoiser
 from src.models.vqc_module import VQCConditionalDenoiser
 
 
@@ -215,6 +215,13 @@ def train_diffusion_cfg(
         denoiser = VQCConditionalDenoiser(
             latent_dim=latent_dim,
             n_qubits=latent_dim,
+        ).to(device_t)
+    elif denoiser_type == "vqc_angle":
+        denoiser = AngleVQCDenoiser(
+            latent_dim=latent_dim,
+            n_layers=int(n_layers),
+            time_dim=int(time_dim),
+            cond_dim=int(cond_dim),
         ).to(device_t)
     elif denoiser_type in ("unet", "unet_vqc"):
         denoiser = HybridUNetDenoiser(
