@@ -12,6 +12,8 @@ Usage:
 """
 from __future__ import annotations
 
+import time
+import datetime
 import torch
 import numpy as np
 from pathlib import Path
@@ -44,6 +46,9 @@ def _extra_args(parser):
 
 
 def main():
+    t_start = time.time()
+    print(f"[train_diffusion] start: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
     cfg, args = parse_config_args(
         "Train CFG diffusion model on train-set latents",
         extra_arg_fn=_extra_args,
@@ -160,6 +165,10 @@ def main():
 
     print(f"\n[train_diffusion] saved → {out_dir}/denoiser_cfg.pt (best loss)")
     print(f"[train_diffusion] saved → {out_dir}/denoiser_cfg_final.pt (final epoch)")
+
+    elapsed = time.time() - t_start
+    print(f"[train_diffusion] end:   {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  "
+          f"(elapsed {elapsed/3600:.2f}h)")
 
 
 if __name__ == "__main__":
