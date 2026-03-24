@@ -164,9 +164,10 @@ def train_diffusion_cfg(
     hidden_dim: int = 512,
     p_uncond: float = 0.15,     # probability of dropping condition during training
     model_type: str = "mlp",    # "mlp" or "vqc"
-    denoiser_type: str = "mlp", # "mlp" | "unet" | "unet_vqc"
+    denoiser_type: str = "mlp", # "mlp" | "unet" | "unet_vqc" | "vqc_angle"
     unet_dims: list | None = None,
     n_layers: int = 2,
+    num_blocks: int = 6,        # number of VQC+CondInj blocks for vqc_angle
     device: str = "cpu",
 ):
     """
@@ -220,6 +221,7 @@ def train_diffusion_cfg(
         denoiser = AngleVQCDenoiser(
             latent_dim=latent_dim,
             n_layers=int(n_layers),
+            num_blocks=int(num_blocks),
             time_dim=int(time_dim),
             cond_dim=int(cond_dim),
         ).to(device_t)

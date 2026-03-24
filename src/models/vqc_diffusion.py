@@ -239,22 +239,52 @@ class HybridUNetDenoiser(nn.Module):
         return self.out_head(x)                         # (B, latent_dim)
 
 
+def _make_angle_vqc_layer(
+    n_qubits: int,
+    n_layers: int,
+    device_type: str,
+) -> "qml.qnn.TorchLayer":
+    """Factory to create an independent TorchLayer for each VQC block."""
+    _pi = math.pi
+    dev = qml.device(device_type, wires=n_qubits)
+    params_per_layer = n_qubits * 3 + n_qubits * 3  # rot + entangle
+    weight_shapes = {"theta": (params_per_layer * n_layers,)}
+
+    @qml.qnode(dev, interface="torch", diff_method="backprop")
+    def vqc_circuit(inputs, theta):
+        qml.AngleEmbedding(inputs * _pi, wires=range(n_qubits), rotation="Y")
+        param_idx = 0
+        for _ in range(n_layers):
+            for i in range(n_qubits):
+                qml.RZ(theta[param_idx],     wires=i)
+                qml.RY(theta[param_idx + 1], wires=i)
+                qml.RZ(theta[param_idx + 2], wires=i)
+                param_idx += 3
+            for p in range(n_qubits):
+                nxt = (p + 1) % n_qubits
+                qml.RZ(-_pi / 2,             wires=nxt)
+                qml.CNOT(wires=[nxt, p])
+                qml.RZ(theta[param_idx],     wires=p)
+                qml.RY(theta[param_idx + 1], wires=nxt)
+                qml.CNOT(wires=[p, nxt])
+                qml.RY(theta[param_idx + 2], wires=nxt)
+                param_idx += 3
+        return [qml.expval(qml.PauliZ(i)) for i in range(n_qubits)]
+
+    return qml.qnn.TorchLayer(vqc_circuit, weight_shapes)
+
+
 class AngleVQCDenoiser(nn.Module):
     """
-    Pure VQC denoiser using angle embedding for small-latent diffusion.
+    VQC denoiser with num_blocks × [AngleVQC + CondInj], mirroring ConditionalDenoisingMLP.
 
-    n_qubits = latent_dim (one qubit per feature dimension).
-    No amplitude embedding — uses RY angle encoding, so latent_dim can be
-    any integer (no power-of-2 constraint).
+    Each block:
+        q_out = VQC_i(AngleEmbedding(π * x))        # angle-encode x, run circuit
+        w, b  = cond2wb_i(cat[t_emb, c_emb])        # dynamic scale/shift from t, c
+        x     = x + w * LayerNorm(q_out) + b         # residual + AdaIN
 
-    Forward path:
-        z_t(B, D), t(B,1), c(B,1)
-            time_mlp(t) → t_emb(B, time_dim)
-            cond_mlp(c) → c_emb(B, cond_dim)
-            cat([z_t, t_emb, c_emb]) → pre_proj → tanh → (B, D)  ← angles in [-1,1]
-            VQC: AngleEmbedding(π * x, RY) + n_layers × (RZY + ring CNOT)
-            [expval(Z_i)] → (B, D)
-            post_affine: δ1 * q_out + δ2 → ε̂(B, D)  (per-dim scale+bias)
+    z_t enters the first block directly (no pre_proj distortion).
+    t/c conditioning is injected at every block, matching the MLP pattern.
     """
 
     NULL_COND = 0.0
@@ -262,7 +292,8 @@ class AngleVQCDenoiser(nn.Module):
     def __init__(
         self,
         latent_dim:  int = 8,
-        n_layers:    int = 2,
+        n_layers:    int = 2,       # circuit depth per VQC block
+        num_blocks:  int = 6,       # number of [VQC + CondInj] blocks (matches MLP num_layers)
         time_dim:    int = 32,
         cond_dim:    int = 32,
         device_type: str = "default.qubit",
@@ -270,12 +301,14 @@ class AngleVQCDenoiser(nn.Module):
         super().__init__()
         self.latent_dim = int(latent_dim)
         self.n_layers   = int(n_layers)
+        self.num_blocks = int(num_blocks)
         self.time_dim   = int(time_dim)
         self.cond_dim   = int(cond_dim)
 
-        n_qubits = self.latent_dim
+        n_qubits       = self.latent_dim
+        cond_embed_dim = time_dim + cond_dim
 
-        # ── Classical conditioning ────────────────────────────────────────
+        # ── Classical conditioning embeddings ─────────────────────────────
         self.time_mlp = nn.Sequential(
             nn.Linear(1, time_dim), nn.SiLU(), nn.Linear(time_dim, time_dim)
         )
@@ -283,50 +316,21 @@ class AngleVQCDenoiser(nn.Module):
             nn.Linear(1, cond_dim), nn.SiLU(), nn.Linear(cond_dim, cond_dim)
         )
 
-        # ── Pre-projection: (z_t ‖ t_emb ‖ c_emb) → latent_dim ─────────
-        self.pre_proj = nn.Sequential(
-            nn.Linear(n_qubits + time_dim + cond_dim, n_qubits),
-            nn.Tanh(),   # bound to (-1, 1) → angles π*x ∈ (-π, π)
-        )
+        # ── num_blocks independent VQC circuits ──────────────────────────
+        self.vqc_blocks = nn.ModuleList([
+            _make_angle_vqc_layer(n_qubits, int(n_layers), device_type)
+            for _ in range(num_blocks)
+        ])
 
-        # ── VQC (angle embedding) ────────────────────────────────────────
-        _pi = math.pi
-        dev = qml.device(device_type, wires=n_qubits)
-        params_per_layer = n_qubits * 3 + n_qubits * 3   # rot + entangle
-        weight_shapes = {"theta": (params_per_layer * n_layers,)}
-
-        @qml.qnode(dev, interface="torch", diff_method="backprop")
-        def vqc_circuit(inputs, theta):
-            # Angle encoding: RY(π * x_i) per qubit
-            qml.AngleEmbedding(inputs * _pi, wires=range(n_qubits), rotation="Y")
-
-            param_idx = 0
-            for _layer in range(n_layers):
-                # Rotation sub-layer
-                for i in range(n_qubits):
-                    qml.RZ(theta[param_idx],     wires=i)
-                    qml.RY(theta[param_idx + 1], wires=i)
-                    qml.RZ(theta[param_idx + 2], wires=i)
-                    param_idx += 3
-                # Ring entanglement
-                for p in range(n_qubits):
-                    nxt = (p + 1) % n_qubits
-                    qml.RZ(-_pi / 2,             wires=nxt)
-                    qml.CNOT(wires=[nxt, p])
-                    qml.RZ(theta[param_idx],     wires=p)
-                    qml.RY(theta[param_idx + 1], wires=nxt)
-                    qml.CNOT(wires=[p, nxt])
-                    qml.RY(theta[param_idx + 2], wires=nxt)
-                    param_idx += 3
-
-            return [qml.expval(qml.PauliZ(i)) for i in range(n_qubits)]
-
-        self.vqc = qml.qnn.TorchLayer(vqc_circuit, weight_shapes)
-
-        # ── Post-affine: δ1 * measurement + δ2  (per-dimension) ────────────
-        # Simpler than Linear(D→D): respects qubit independence, 2D params vs D²
-        self.post_scale = nn.Parameter(torch.ones(self.latent_dim))
-        self.post_bias  = nn.Parameter(torch.zeros(self.latent_dim))
+        # ── CondInj per block: cond → (w, b) each of size D ──────────────
+        # Direct projection (no bottleneck) to preserve conditioning signal.
+        self.cond2wb = nn.ModuleList([
+            nn.Linear(cond_embed_dim, n_qubits * 2)
+            for _ in range(num_blocks)
+        ])
+        self.norms = nn.ModuleList([
+            nn.LayerNorm(n_qubits) for _ in range(num_blocks)
+        ])
 
         # ── Normalization buffers ─────────────────────────────────────────
         self.register_buffer("z_mean", torch.zeros(self.latent_dim), persistent=True)
@@ -356,12 +360,14 @@ class AngleVQCDenoiser(nn.Module):
         if c.dim() == 1:
             c = c.unsqueeze(1)
 
-        t_emb = self.time_mlp(t)                          # (B, time_dim)
-        c_emb = self.cond_mlp(c)                          # (B, cond_dim)
+        t_emb = self.time_mlp(t)                           # (B, time_dim)
+        c_emb = self.cond_mlp(c)                           # (B, cond_dim)
+        cond  = torch.cat([t_emb, c_emb], dim=-1)         # (B, cond_embed_dim)
 
-        x = self.pre_proj(torch.cat([z_t, t_emb, c_emb], dim=-1))  # (B, n_qubits), tanh
+        x = z_t
+        for vqc, c2wb, norm in zip(self.vqc_blocks, self.cond2wb, self.norms):
+            q_out = vqc(x.double()).float()                # (B, D)  measurements ∈ [-1,1]
+            w, b  = c2wb(cond).chunk(2, dim=-1)           # (B, D) each
+            x     = x + w * norm(q_out) + b               # residual + AdaIN
 
-        # VQC expects float64 for numerical stability
-        q_out = self.vqc(x.double()).float()              # (B, n_qubits)
-
-        return self.post_scale * q_out + self.post_bias   # (B, latent_dim)
+        return x                                           # ε̂ (B, latent_dim)

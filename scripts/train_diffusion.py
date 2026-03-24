@@ -88,9 +88,10 @@ def main():
         unet_dims = [int(d) for d in str(_cfg_dims).split(",") if d.strip()] or None
     else:
         unet_dims = None
-    n_layers = args.n_layers if args.n_layers != 2 else int(diff_cfg.get("n_layers", args.n_layers))
-    time_dim = args.time_dim if args.time_dim != 32 else int(diff_cfg.get("time_dim", args.time_dim))
-    cond_dim = args.cond_dim if args.cond_dim != 32 else int(diff_cfg.get("cond_dim", args.cond_dim))
+    n_layers   = args.n_layers if args.n_layers != 2 else int(diff_cfg.get("n_layers", args.n_layers))
+    num_blocks = int(diff_cfg.get("num_blocks", 6))
+    time_dim   = args.time_dim if args.time_dim != 32 else int(diff_cfg.get("time_dim", args.time_dim))
+    cond_dim   = args.cond_dim if args.cond_dim != 32 else int(diff_cfg.get("cond_dim", args.cond_dim))
 
     print(f"[train_diffusion] denoiser_type={denoiser_type}  unet_dims={unet_dims}")
     print(f"[train_diffusion] time_dim={time_dim}  cond_dim={cond_dim}")
@@ -112,6 +113,7 @@ def main():
         denoiser_type=denoiser_type,
         unet_dims=unet_dims,
         n_layers=n_layers,
+        num_blocks=num_blocks,
         device=device,
     )
     z_mean, z_std, c_mean, c_std = stats
@@ -136,9 +138,10 @@ def main():
             ckpt["n_qubits"] = denoiser.n_qubits
             ckpt["n_layers"] = denoiser.n_layers
         elif denoiser_type == "vqc_angle":
-            ckpt["n_layers"] = denoiser.n_layers
-            ckpt["time_dim"] = time_dim
-            ckpt["cond_dim"] = cond_dim
+            ckpt["n_layers"]   = denoiser.n_layers
+            ckpt["num_blocks"] = denoiser.num_blocks
+            ckpt["time_dim"]   = time_dim
+            ckpt["cond_dim"]   = cond_dim
         elif denoiser_type in ("unet", "unet_vqc"):
             ckpt["unet_dims"] = denoiser.unet_dims
             ckpt["n_layers"] = denoiser.n_layers
