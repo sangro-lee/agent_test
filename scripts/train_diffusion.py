@@ -37,8 +37,8 @@ def _extra_args(parser):
     parser.add_argument("--use_vqc",       action="store_true",
                         help="(legacy) Use VQCConditionalDenoiser instead of MLP (requires 8-dim latents)")
     parser.add_argument("--denoiser_type", type=str, default="mlp",
-                        choices=["mlp", "unet", "unet_vqc", "vqc_angle"],
-                        help="Denoiser architecture: mlp | unet | unet_vqc | vqc_angle")
+                        choices=["mlp", "unet", "unet_vqc", "vqc_angle", "vqc_qubit_cond"],
+                        help="Denoiser architecture: mlp | unet | unet_vqc | vqc_angle | vqc_qubit_cond")
     parser.add_argument("--unet_dims",     type=str, default="",
                         help="Comma-separated U-Net hidden dims, e.g. '256,128,64' (default: auto)")
     parser.add_argument("--n_layers",      type=int, default=2,
@@ -147,6 +147,9 @@ def main():
             ckpt["num_blocks"] = denoiser.num_blocks
             ckpt["time_dim"]   = time_dim
             ckpt["cond_dim"]   = cond_dim
+        elif denoiser_type == "vqc_qubit_cond":
+            ckpt["n_layers"]   = denoiser.n_layers
+            ckpt["num_blocks"] = denoiser.num_blocks
         elif denoiser_type in ("unet", "unet_vqc"):
             ckpt["unet_dims"] = denoiser.unet_dims
             ckpt["n_layers"] = denoiser.n_layers

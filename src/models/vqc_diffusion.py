@@ -371,3 +371,123 @@ class AngleVQCDenoiser(nn.Module):
             x     = x + w * norm(q_out) + b               # residual + AdaIN
 
         return x                                           # ε̂ (B, latent_dim)
+
+
+def _make_qubit_cond_vqc_layer(
+    latent_dim: int,
+    n_layers: int,
+    device_type: str,
+) -> "qml.qnn.TorchLayer":
+    """Factory for QubitCondVQCDenoiser blocks.
+
+    Total qubits = latent_dim + 2.
+    Inputs: cat([x(D), t(1), sigmoid(c)(1)]) — all scaled by π.
+    Measures: qubits 0..D-1 only (conditioning qubits D, D+1 are ancilla).
+    """
+    _pi = math.pi
+    n_total = latent_dim + 2
+    dev = qml.device(device_type, wires=n_total)
+    params_per_layer = n_total * 3 + n_total * 3
+    weight_shapes = {"theta": (params_per_layer * n_layers,)}
+
+    @qml.qnode(dev, interface="torch", diff_method="backprop")
+    def vqc_circuit(inputs, theta):
+        # inputs: (D+2,) = [z_angles(D), t_angle(1), c_angle(1)]
+        qml.AngleEmbedding(inputs * _pi, wires=range(n_total), rotation="Y")
+        param_idx = 0
+        for _ in range(n_layers):
+            for i in range(n_total):
+                qml.RZ(theta[param_idx],     wires=i)
+                qml.RY(theta[param_idx + 1], wires=i)
+                qml.RZ(theta[param_idx + 2], wires=i)
+                param_idx += 3
+            for p in range(n_total):
+                nxt = (p + 1) % n_total
+                qml.RZ(-_pi / 2,             wires=nxt)
+                qml.CNOT(wires=[nxt, p])
+                qml.RZ(theta[param_idx],     wires=p)
+                qml.RY(theta[param_idx + 1], wires=nxt)
+                qml.CNOT(wires=[p, nxt])
+                qml.RY(theta[param_idx + 2], wires=nxt)
+                param_idx += 3
+        # measure only latent qubits (0..D-1), not conditioning qubits
+        return [qml.expval(qml.PauliZ(i)) for i in range(latent_dim)]
+
+    return qml.qnn.TorchLayer(vqc_circuit, weight_shapes)
+
+
+class QubitCondVQCDenoiser(nn.Module):
+    """
+    VQC denoiser with quantum-native conditioning via dedicated qubits.
+
+    Architecture per block:
+        inputs = cat([x(D), t(1), sigmoid(c)(1)])   ← (D+2,)
+        AngleEmbedding(π * inputs) on D+2 qubits
+        RZY + ring CNOT × n_layers  (t,c qubits entangle with latent qubits)
+        measure qubits 0..D-1  →  q_out (B, D)
+        x = x + q_out                               ← residual
+
+    t is already in [0,1]; c is z-scored so sigmoid maps it to (0,1).
+    Repeat for num_blocks blocks — no classical CondInj needed.
+    """
+
+    NULL_COND = 0.0
+
+    def __init__(
+        self,
+        latent_dim:  int = 8,
+        n_layers:    int = 2,
+        num_blocks:  int = 6,
+        time_dim:    int = 32,   # noqa: kept for interface compatibility with other denoisers
+        cond_dim:    int = 32,   # noqa: kept for interface compatibility with other denoisers
+        device_type: str = "default.qubit",
+    ):
+        super().__init__()
+        self.latent_dim = int(latent_dim)
+        self.n_layers   = int(n_layers)
+        self.num_blocks = int(num_blocks)
+
+        self.vqc_blocks = nn.ModuleList([
+            _make_qubit_cond_vqc_layer(latent_dim, int(n_layers), device_type)
+            for _ in range(num_blocks)
+        ])
+
+        self.register_buffer("z_mean", torch.zeros(self.latent_dim), persistent=True)
+        self.register_buffer("z_std",  torch.ones(self.latent_dim),  persistent=True)
+        self.register_buffer("c_mean", torch.zeros(1),               persistent=True)
+        self.register_buffer("c_std",  torch.ones(1),                persistent=True)
+
+    def set_normalization(self, z_mean, z_std, c_mean=None, c_std=None):
+        self.z_mean.copy_(z_mean.detach())
+        self.z_std.copy_(z_std.detach())
+        if c_mean is not None:
+            self.c_mean.copy_(c_mean.detach().view(1))
+        if c_std is not None:
+            self.c_std.copy_(c_std.detach().view(1))
+
+    def forward(self, z_t: torch.Tensor, t: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            z_t: (B, latent_dim)
+            t:   (B,) or (B, 1)  normalized timestep in [0, 1]
+            c:   (B, 1)          normalized pIC50; use NULL_COND for unconditional
+        Returns:
+            eps_pred: (B, latent_dim)
+        """
+        if t.dim() == 1:
+            t = t.unsqueeze(1)
+        if c.dim() == 1:
+            c = c.unsqueeze(1)
+
+        # t ∈ [0,1] already; sigmoid(c) maps z-scored pIC50 → (0,1)
+        t_enc = t                                          # (B, 1)
+        c_enc = torch.sigmoid(c)                          # (B, 1)
+
+        x = z_t
+        for vqc in self.vqc_blocks:
+            # cat latent + conditioning angles → (B, D+2)
+            inp = torch.cat([x, t_enc, c_enc], dim=-1)   # (B, D+2)
+            q_out = vqc(inp.double()).float()             # (B, D)
+            x = x + q_out                                # residual
+
+        return x                                          # ε̂ (B, latent_dim)

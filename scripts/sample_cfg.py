@@ -28,7 +28,7 @@ import torch
 from pathlib import Path
 
 from src.models.diffusion import ConditionalDenoisingMLP
-from src.models.vqc_diffusion import AngleVQCDenoiser, HybridUNetDenoiser
+from src.models.vqc_diffusion import AngleVQCDenoiser, HybridUNetDenoiser, QubitCondVQCDenoiser
 from src.models.vqc_module import VQCConditionalDenoiser
 from src.screening.latent_opt import retrieve_nearest, sample_cfg
 from src.utils.config import parse_config_args
@@ -100,6 +100,12 @@ def main():
             num_blocks=int(ckpt.get("num_blocks", 6)),
             time_dim=int(ckpt.get("time_dim", 32)),
             cond_dim=int(ckpt.get("cond_dim", 32)),
+        )
+    elif denoiser_type == "vqc_qubit_cond":
+        denoiser = QubitCondVQCDenoiser(
+            latent_dim=latent_dim,
+            n_layers=int(ckpt.get("n_layers", 2)),
+            num_blocks=int(ckpt.get("num_blocks", 6)),
         )
     elif denoiser_type in ("unet", "unet_vqc"):
         denoiser = HybridUNetDenoiser(
