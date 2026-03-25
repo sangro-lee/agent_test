@@ -189,7 +189,7 @@ class HybridUNetDenoiser(nn.Module):
         x_d = torch.nan_to_num(x_d, nan=0.0, posinf=0.0, neginf=0.0)
         norms = x_d.pow(2).sum(dim=-1, keepdim=True).sqrt().clamp_min(1e-12)
         x_d = x_d / norms                    # unit-norm for AmplitudeEmbedding
-        q_out = self.vqc(x_d)               # (B, n_qubits)
+        q_out = self.vqc(x_d.cpu()).to(x.device)  # VQC on CPU (statevector), move back
         return self.bottleneck_proj_out(q_out.float())  # (B, bottleneck_dim)
 
     def forward(
@@ -366,7 +366,7 @@ class AngleVQCDenoiser(nn.Module):
 
         x = z_t
         for vqc, c2wb, norm in zip(self.vqc_blocks, self.cond2wb, self.norms):
-            q_out = vqc(x.double()).float()                # (B, D)  measurements ∈ [-1,1]
+            q_out = vqc(x.cpu().double()).to(x.device).float()  # VQC on CPU (statevector), move back
             w, b  = c2wb(cond).chunk(2, dim=-1)           # (B, D) each
             x     = x + w * norm(q_out) + b               # residual + AdaIN
 
@@ -487,7 +487,7 @@ class QubitCondVQCDenoiser(nn.Module):
         for vqc in self.vqc_blocks:
             # cat latent + conditioning angles → (B, D+2)
             inp = torch.cat([x, t_enc, c_enc], dim=-1)   # (B, D+2)
-            q_out = vqc(inp.double()).float()             # (B, D)
+            q_out = vqc(inp.cpu().double()).to(inp.device).float()  # VQC on CPU
             x = x + q_out                                # residual
 
         return x                                          # ε̂ (B, latent_dim)
