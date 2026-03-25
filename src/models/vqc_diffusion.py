@@ -183,6 +183,13 @@ class HybridUNetDenoiser(nn.Module):
         if c_std is not None:
             self.c_std.copy_(c_std.detach().view(1))
 
+    def to(self, *args, **kwargs):
+        """Keep VQC circuit on CPU regardless of device transfer."""
+        super().to(*args, **kwargs)
+        if self.use_vqc:
+            self.vqc.cpu()
+        return self
+
     def _vqc_bottleneck(self, x: torch.Tensor) -> torch.Tensor:
         """AmplitudeEmbedding → VQC → proj_out. x: (B, bottleneck_dim)."""
         x_d = x.double()
@@ -346,6 +353,12 @@ class AngleVQCDenoiser(nn.Module):
         if c_std is not None:
             self.c_std.copy_(c_std.detach().view(1))
 
+    def to(self, *args, **kwargs):
+        """Keep vqc_blocks on CPU regardless of device transfer."""
+        super().to(*args, **kwargs)
+        self.vqc_blocks.cpu()
+        return self
+
     def forward(self, z_t: torch.Tensor, t: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         """
         Args:
@@ -464,6 +477,12 @@ class QubitCondVQCDenoiser(nn.Module):
             self.c_mean.copy_(c_mean.detach().view(1))
         if c_std is not None:
             self.c_std.copy_(c_std.detach().view(1))
+
+    def to(self, *args, **kwargs):
+        """Keep vqc_blocks on CPU regardless of device transfer."""
+        super().to(*args, **kwargs)
+        self.vqc_blocks.cpu()
+        return self
 
     def forward(self, z_t: torch.Tensor, t: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         """
