@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 from torch import nn
+from torch.nn.utils.parametrizations import orthogonal
 
 
 class DenoisingMLP(nn.Module):
@@ -89,12 +90,14 @@ class ConditionalDenoisingMLP(nn.Module):
         cond_dim: int = 128,
         hidden_dim: int = 512,
         num_layers: int = 6,
+        use_orthogonal: bool = False,
     ):
         super().__init__()
         self.latent_dim = int(latent_dim)
         self.time_dim = int(time_dim)
         self.cond_dim = int(cond_dim)
         self.num_layers = int(num_layers)
+        self.use_orthogonal = bool(use_orthogonal)
 
         # Time embedding
         self.time_mlp = nn.Sequential(
@@ -122,6 +125,12 @@ class ConditionalDenoisingMLP(nn.Module):
 
         # Output projection: hidden → latent (predict noise)
         self.output_proj = nn.Linear(hidden_dim, self.latent_dim)
+
+        # Apply orthogonal parametrization to f1, f2 in each noise-prediction layer
+        if use_orthogonal:
+            for layer in self.layers:
+                orthogonal(layer.f1)
+                orthogonal(layer.f2)
 
         self.register_buffer("z_mean", torch.zeros(self.latent_dim), persistent=True)
         self.register_buffer("z_std", torch.ones(self.latent_dim), persistent=True)

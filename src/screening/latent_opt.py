@@ -240,6 +240,14 @@ def train_diffusion_cfg(
             cond_dim=int(cond_dim),
             use_vqc=(denoiser_type == "unet_vqc"),
         ).to(device_t)
+    elif denoiser_type == "mlp_ortho":
+        denoiser = ConditionalDenoisingMLP(
+            latent_dim=latent_dim,
+            time_dim=int(time_dim),
+            cond_dim=int(cond_dim),
+            hidden_dim=int(hidden_dim),
+            use_orthogonal=True,
+        ).to(device_t)
     else:
         denoiser = ConditionalDenoisingMLP(
             latent_dim=latent_dim,

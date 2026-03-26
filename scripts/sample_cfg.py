@@ -116,6 +116,14 @@ def main():
             cond_dim=int(ckpt.get("cond_dim", 128)),
             use_vqc=(denoiser_type == "unet_vqc"),
         )
+    elif denoiser_type == "mlp_ortho":
+        denoiser = ConditionalDenoisingMLP(
+            latent_dim=latent_dim,
+            time_dim=int(ckpt["time_dim"]),
+            cond_dim=int(ckpt["cond_dim"]),
+            hidden_dim=int(ckpt.get("hidden_dim", 512)),
+            use_orthogonal=True,
+        )
     else:
         denoiser = ConditionalDenoisingMLP(
             latent_dim=latent_dim,
