@@ -304,6 +304,7 @@ class AngleVQCDenoiser(nn.Module):
         time_dim:    int = 32,
         cond_dim:    int = 32,
         device_type: str = "default.qubit",
+        use_delta:   bool = False,  # per-block learnable affine on VQC output (δ1·norm(q)+δ2)
     ):
         super().__init__()
         self.latent_dim = int(latent_dim)
@@ -311,6 +312,7 @@ class AngleVQCDenoiser(nn.Module):
         self.num_blocks = int(num_blocks)
         self.time_dim   = int(time_dim)
         self.cond_dim   = int(cond_dim)
+        self.use_delta  = bool(use_delta)
 
         n_qubits       = self.latent_dim
         cond_embed_dim = time_dim + cond_dim
@@ -338,6 +340,15 @@ class AngleVQCDenoiser(nn.Module):
         self.norms = nn.ModuleList([
             nn.LayerNorm(n_qubits) for _ in range(num_blocks)
         ])
+
+        # ── Per-block learnable affine on VQC output (optional) ──────────
+        if use_delta:
+            self.deltas1 = nn.ParameterList([
+                nn.Parameter(torch.ones(n_qubits)) for _ in range(num_blocks)
+            ])
+            self.deltas2 = nn.ParameterList([
+                nn.Parameter(torch.zeros(n_qubits)) for _ in range(num_blocks)
+            ])
 
         # ── Normalization buffers ─────────────────────────────────────────
         self.register_buffer("z_mean", torch.zeros(self.latent_dim), persistent=True)
@@ -378,10 +389,15 @@ class AngleVQCDenoiser(nn.Module):
         cond  = torch.cat([t_emb, c_emb], dim=-1)         # (B, cond_embed_dim)
 
         x = z_t
-        for vqc, c2wb, norm in zip(self.vqc_blocks, self.cond2wb, self.norms):
+        for i, (vqc, c2wb, norm) in enumerate(zip(self.vqc_blocks, self.cond2wb, self.norms)):
             q_out = vqc(x.cpu().double()).to(x.device).float()  # VQC on CPU (statevector), move back
+            if self.use_delta:
+                d1, d2 = self.deltas1[i], self.deltas2[i]
+                q_out = d1 * norm(q_out) + d2              # per-dim learnable affine
+            else:
+                q_out = norm(q_out)
             w, b  = c2wb(cond).chunk(2, dim=-1)           # (B, D) each
-            x     = x + w * norm(q_out) + b               # residual + AdaIN
+            x     = x + w * q_out + b                     # residual + AdaIN
 
         return x                                           # ε̂ (B, latent_dim)
 
