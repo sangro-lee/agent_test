@@ -12,9 +12,14 @@ Usage:
 """
 from __future__ import annotations
 
+import os
 import time
 import datetime
 import torch
+
+_n_cpu = int(os.environ.get("SLURM_CPUS_PER_TASK", os.cpu_count() or 1))
+torch.set_num_threads(_n_cpu)
+torch.set_num_interop_threads(_n_cpu)
 import numpy as np
 from pathlib import Path
 
