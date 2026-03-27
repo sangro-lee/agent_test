@@ -49,6 +49,8 @@ def _extra_args(parser):
                         help="Diffusion steps used during training (must match checkpoint)")
     parser.add_argument("--diff_epochs",    type=int,   default=200,
                         help="Training epochs used (must match checkpoint folder)")
+    parser.add_argument("--date",           type=str,   default=None,
+                        help="Date subfolder under diffusion/ (e.g. 2026-03-26); omit for legacy paths")
     parser.add_argument("--screening_latents", type=str, default=None,
                         help="Path to .npy file of external screening latents")
     parser.add_argument("--screening_smiles",  type=str, default=None,
@@ -74,7 +76,9 @@ def main():
             device = "cpu"
 
     # ---- Load saved denoiser ----------------------------------------------
-    ckpt_path = Path(run_dir) / "diffusion" / f"T{args.T}_ep{args.diff_epochs}" / "denoiser_cfg.pt"
+    _diff_subdir = (Path("diffusion") / args.date / f"T{args.T}_ep{args.diff_epochs}"
+                    if args.date else Path("diffusion") / f"T{args.T}_ep{args.diff_epochs}")
+    ckpt_path = Path(run_dir) / _diff_subdir / "denoiser_cfg.pt"
     if not ckpt_path.exists():
         raise FileNotFoundError(
             f"Denoiser not found: {ckpt_path}\n"
@@ -265,7 +269,7 @@ def main():
     top_indices = order[: min(args.top_k, len(order))]
 
     w_tag = f"cfg_w{args.guidance_scale:.1f}_{args.sampler}"
-    out_dir = Path(run_dir) / "diffusion" / f"T{args.T}_ep{args.diff_epochs}" / w_tag
+    out_dir = Path(run_dir) / _diff_subdir / w_tag
     out_dir.mkdir(parents=True, exist_ok=True)
 
     np.save(out_dir / "z_samples.npy", z_samples)
