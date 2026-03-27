@@ -54,3 +54,4 @@ diffusion:
   time_dim: 32
   cond_dim: 32
   num_blocks: 6
+  initial_cnot: false
