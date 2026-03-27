@@ -269,7 +269,7 @@ def _make_reupload_vqc_layer(
         param_idx = 0
         for l in range(n_layers):
             # Data re-uploading: encode at the start of EVERY layer
-            x_l = inputs[l * n_qubits : (l + 1) * n_qubits]
+            x_l = inputs[..., l * n_qubits : (l + 1) * n_qubits]
             qml.AngleEmbedding(x_l * _pi, wires=range(n_qubits), rotation="Y")
             # Fixed CNOT ring once after first encoding
             if initial_cnot and l == 0:
@@ -423,6 +423,10 @@ class AngleVQCDenoiser(nn.Module):
             self.lambda_scales = nn.ParameterList([
                 nn.Parameter(torch.ones(n_layers, n_qubits)) for _ in range(num_blocks)
             ])
+            # input_biases[b]: (n_layers, n_qubits) — per-layer per-qubit input bias (UQC: ω·x + α)
+            self.input_biases = nn.ParameterList([
+                nn.Parameter(torch.zeros(n_layers, n_qubits)) for _ in range(num_blocks)
+            ])
             # output_scales[b]: (n_qubits,) — per-qubit output scale
             self.output_scales = nn.ParameterList([
                 nn.Parameter(torch.ones(n_qubits)) for _ in range(num_blocks)
@@ -469,9 +473,9 @@ class AngleVQCDenoiser(nn.Module):
         x = z_t
         for i, (vqc, c2wb, norm) in enumerate(zip(self.vqc_blocks, self.cond2wb, self.norms)):
             if self.use_reupload:
-                # lambda_scales[i]: (n_layers, n_qubits); x: (B, n_qubits)
-                # scaled: (B, n_layers, n_qubits) → flatten to (B, n_layers * n_qubits)
-                scaled = (self.lambda_scales[i] * x.unsqueeze(1))  # broadcast over batch
+                # lambda_scales[i]: (n_layers, n_qubits); input_biases[i]: (n_layers, n_qubits)
+                # x: (B, n_qubits) → scaled+biased: (B, n_layers, n_qubits) → (B, n_layers * n_qubits)
+                scaled = self.lambda_scales[i] * x.unsqueeze(1) + self.input_biases[i]
                 inp = scaled.reshape(x.shape[0], -1)                # (B, n_layers * n_qubits)
                 q_out = vqc(inp.cpu().double()).to(x.device).float()
                 q_out = self.output_scales[i] * norm(q_out)         # trainable output scale
