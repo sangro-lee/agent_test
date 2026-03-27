@@ -31,6 +31,10 @@ env/
 # pdf
 *.pdf
 
+# visualization scripts & outputs
+scripts/visualize_vqc.py
+*.png
+
 # IDE
 .idea/
 .vscode/

@@ -102,6 +102,7 @@ def main():
             cond_dim=int(ckpt.get("cond_dim", 32)),
             use_delta=bool(ckpt.get("use_delta", False)),
             use_reupload=bool(ckpt.get("use_reupload", False)),
+            initial_cnot=bool(ckpt.get("initial_cnot", False)),
         )
     elif denoiser_type == "vqc_qubit_cond":
         denoiser = QubitCondVQCDenoiser(

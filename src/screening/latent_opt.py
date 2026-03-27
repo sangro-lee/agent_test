@@ -170,6 +170,7 @@ def train_diffusion_cfg(
     unet_dims: list | None = None,
     n_layers: int = 2,
     num_blocks: int = 6,        # number of VQC+CondInj blocks for vqc_angle
+    initial_cnot: bool = False, # fixed CNOT ring after AngleEmbedding
     device: str = "cpu",
 ):
     """
@@ -244,6 +245,7 @@ def train_diffusion_cfg(
             cond_dim=int(cond_dim),
             use_delta=(denoiser_type == "vqc_angle_delta"),
             use_reupload=(denoiser_type == "vqc_angle_reupload"),
+            initial_cnot=initial_cnot,
         ).to(device_t)
     elif denoiser_type == "vqc_qubit_cond":
         denoiser = QubitCondVQCDenoiser(

@@ -250,11 +250,13 @@ def _make_reupload_vqc_layer(
     n_qubits: int,
     n_layers: int,
     device_type: str,
+    initial_cnot: bool = False,
 ) -> "qml.qnn.TorchLayer":
     """Factory for data re-uploading VQC blocks (Skolik architecture).
 
     inputs shape: (n_layers * n_qubits,) — pre-scaled by lambda_scales outside the qnode.
     At each layer l, inputs[l*n_qubits:(l+1)*n_qubits] are re-encoded via AngleEmbedding.
+    initial_cnot: if True, a fixed CNOT ring is inserted once after the first encoding.
     """
     _pi = math.pi
     dev = qml.device(device_type, wires=n_qubits)
@@ -269,6 +271,10 @@ def _make_reupload_vqc_layer(
             # Data re-uploading: encode at the start of EVERY layer
             x_l = inputs[l * n_qubits : (l + 1) * n_qubits]
             qml.AngleEmbedding(x_l * _pi, wires=range(n_qubits), rotation="Y")
+            # Fixed CNOT ring once after first encoding
+            if initial_cnot and l == 0:
+                for j in range(n_qubits):
+                    qml.CNOT(wires=[j, (j + 1) % n_qubits])
             # Variational rotations
             for i in range(n_qubits):
                 qml.RZ(theta[param_idx],     wires=i)
@@ -294,8 +300,12 @@ def _make_angle_vqc_layer(
     n_qubits: int,
     n_layers: int,
     device_type: str,
+    initial_cnot: bool = False,
 ) -> "qml.qnn.TorchLayer":
-    """Factory to create an independent TorchLayer for each VQC block."""
+    """Factory to create an independent TorchLayer for each VQC block.
+
+    initial_cnot: if True, a fixed CNOT ring is inserted after AngleEmbedding.
+    """
     _pi = math.pi
     dev = qml.device(device_type, wires=n_qubits)
     params_per_layer = n_qubits * 3 + n_qubits * 3  # rot + entangle
@@ -304,6 +314,9 @@ def _make_angle_vqc_layer(
     @qml.qnode(dev, interface="torch", diff_method="backprop")
     def vqc_circuit(inputs, theta):
         qml.AngleEmbedding(inputs * _pi, wires=range(n_qubits), rotation="Y")
+        if initial_cnot:
+            for j in range(n_qubits):
+                qml.CNOT(wires=[j, (j + 1) % n_qubits])
         param_idx = 0
         for _ in range(n_layers):
             for i in range(n_qubits):
@@ -350,6 +363,7 @@ class AngleVQCDenoiser(nn.Module):
         device_type:  str = "default.qubit",
         use_delta:    bool = False,  # per-block learnable affine on VQC output (δ1·norm(q)+δ2)
         use_reupload: bool = False,  # data re-uploading: encode x at start of every layer
+        initial_cnot: bool = False,  # fixed CNOT ring after initial AngleEmbedding
     ):
         super().__init__()
         self.latent_dim   = int(latent_dim)
@@ -359,6 +373,7 @@ class AngleVQCDenoiser(nn.Module):
         self.cond_dim     = int(cond_dim)
         self.use_delta    = bool(use_delta)
         self.use_reupload = bool(use_reupload)
+        self.initial_cnot = bool(initial_cnot)
 
         n_qubits       = self.latent_dim
         cond_embed_dim = time_dim + cond_dim
@@ -374,12 +389,12 @@ class AngleVQCDenoiser(nn.Module):
         # ── num_blocks independent VQC circuits ──────────────────────────
         if use_reupload:
             self.vqc_blocks = nn.ModuleList([
-                _make_reupload_vqc_layer(n_qubits, int(n_layers), device_type)
+                _make_reupload_vqc_layer(n_qubits, int(n_layers), device_type, initial_cnot=initial_cnot)
                 for _ in range(num_blocks)
             ])
         else:
             self.vqc_blocks = nn.ModuleList([
-                _make_angle_vqc_layer(n_qubits, int(n_layers), device_type)
+                _make_angle_vqc_layer(n_qubits, int(n_layers), device_type, initial_cnot=initial_cnot)
                 for _ in range(num_blocks)
             ])
 
