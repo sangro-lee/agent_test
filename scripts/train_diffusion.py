@@ -23,6 +23,8 @@ torch.set_num_interop_threads(_n_cpu)
 import numpy as np
 from pathlib import Path
 
+import csv
+
 from src.screening.latent_opt import train_diffusion_cfg
 from src.utils.config import parse_config_args
 from src.utils.io import load_numpy, resolve_run_dir
@@ -76,7 +78,15 @@ def main():
     y_train = load_numpy(run_dir / "y_train.npy").astype(np.float32)
     latent_dim = int(z_train.shape[1])
 
-    print(f"[train_diffusion] latent_dim={latent_dim}  n_train={len(z_train)}")
+    z_val, y_val = None, None
+    _val_z = run_dir / "latents_val.npy"
+    _val_y = run_dir / "y_val.npy"
+    if _val_z.exists() and _val_y.exists():
+        z_val = load_numpy(_val_z).astype(np.float32)
+        y_val = load_numpy(_val_y).astype(np.float32)
+
+    print(f"[train_diffusion] latent_dim={latent_dim}  n_train={len(z_train)}"
+          + (f"  n_val={len(z_val)}" if z_val is not None else ""))
     print(f"[train_diffusion] epochs={args.diff_epochs}  T={args.T}  device={device}")
 
     # ---- Resolve denoiser type (config < CLI) ----------------------------
@@ -107,9 +117,11 @@ def main():
     print(f"[train_diffusion] time_dim={time_dim}  cond_dim={cond_dim}")
 
     # ---- Train CFG denoiser -----------------------------------------------
-    denoiser, best_state_dict, stats = train_diffusion_cfg(
+    denoiser, best_state_dict, stats, history = train_diffusion_cfg(
         z_train=z_train,
         y_train=y_train,
+        z_val=z_val,
+        y_val=y_val,
         latent_dim=latent_dim,
         epochs=args.diff_epochs,
         batch_size=args.batch_size,
@@ -172,8 +184,17 @@ def main():
     # final epoch checkpoint
     torch.save(_ckpt(denoiser.state_dict()), out_dir / "denoiser_cfg_final.pt")
 
+    # loss history CSV
+    if history:
+        keys = list(history[0].keys())
+        with open(out_dir / "loss_history.csv", "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=keys)
+            writer.writeheader()
+            writer.writerows(history)
+
     print(f"\n[train_diffusion] saved → {out_dir}/denoiser_cfg.pt (best loss)")
     print(f"[train_diffusion] saved → {out_dir}/denoiser_cfg_final.pt (final epoch)")
+    print(f"[train_diffusion] saved → {out_dir}/loss_history.csv")
 
     elapsed = time.time() - t_start
     print(f"[train_diffusion] end:   {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  "

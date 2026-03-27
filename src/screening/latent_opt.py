@@ -154,6 +154,8 @@ def train_diffusion(
 def train_diffusion_cfg(
     z_train,
     y_train,                    # pIC50 values, shape (N,)
+    z_val=None,                 # optional val latents
+    y_val=None,                 # optional val pIC50 values
     latent_dim: int = 128,
     epochs: int = 200,
     batch_size: int = 256,
@@ -211,6 +213,22 @@ def train_diffusion_cfg(
         shuffle=True,
         drop_last=False,
     )
+
+    val_loader = None
+    if z_val is not None and y_val is not None:
+        z_val = np.asarray(z_val, dtype=np.float32)
+        y_val = np.asarray(y_val, dtype=np.float32).reshape(-1)
+        z_val_norm = (z_val - z_mean) / z_std
+        c_val_norm = (y_val - c_mean) / c_std
+        val_loader = DataLoader(
+            TensorDataset(
+                torch.tensor(z_val_norm, dtype=torch.float32),
+                torch.tensor(c_val_norm, dtype=torch.float32),
+            ),
+            batch_size=int(batch_size),
+            shuffle=False,
+            drop_last=False,
+        )
 
     if model_type == "vqc":
         denoiser = VQCConditionalDenoiser(
@@ -271,6 +289,7 @@ def train_diffusion_cfg(
     import copy
     best_loss = float("inf")
     best_state_dict = None
+    history = []  # list of {"epoch", "train_loss", "val_loss"}
 
     denoiser.train()
     for epoch in range(int(epochs)):
@@ -298,17 +317,47 @@ def train_diffusion_cfg(
             epoch_loss += loss.item()
             n_batches += 1
 
-        avg_loss = epoch_loss / max(n_batches, 1)
-        if avg_loss < best_loss:
-            best_loss = avg_loss
+        train_loss = epoch_loss / max(n_batches, 1)
+
+        # Val loss
+        val_loss = None
+        if val_loader is not None:
+            denoiser.eval()
+            val_epoch_loss = 0.0
+            val_batches = 0
+            with torch.no_grad():
+                for z0_batch, c_batch in val_loader:
+                    z0_batch = z0_batch.to(device_t)
+                    c_batch = c_batch.to(device_t).unsqueeze(1)
+                    t_idx = torch.randint(0, int(T), (z0_batch.size(0),), device=device_t)
+                    t_norm = (t_idx.float().unsqueeze(1) + 1.0) / float(T)
+                    z_t, eps = scheduler.add_noise(z0_batch, t_idx)
+                    eps_pred = denoiser(z_t, t_norm, c_batch)
+                    val_epoch_loss += F.mse_loss(eps_pred, eps).item()
+                    val_batches += 1
+            val_loss = val_epoch_loss / max(val_batches, 1)
+            denoiser.train()
+
+        monitor_loss = val_loss if val_loss is not None else train_loss
+        if monitor_loss < best_loss:
+            best_loss = monitor_loss
             best_state_dict = copy.deepcopy(denoiser.state_dict())
 
+        row = {"epoch": epoch + 1, "train_loss": train_loss}
+        if val_loss is not None:
+            row["val_loss"] = val_loss
+        history.append(row)
+
         if (epoch + 1) % 50 == 0:
-            print(f"  [diffusion cfg] epoch {epoch+1}/{epochs} loss={avg_loss:.4f}  best={best_loss:.4f}")
+            if val_loss is not None:
+                print(f"  [diffusion cfg] epoch {epoch+1}/{epochs} "
+                      f"train={train_loss:.4f}  val={val_loss:.4f}  best={best_loss:.4f}")
+            else:
+                print(f"  [diffusion cfg] epoch {epoch+1}/{epochs} loss={train_loss:.4f}  best={best_loss:.4f}")
 
     denoiser.eval()
     stats = (z_mean.astype(np.float32), z_std.astype(np.float32), c_mean, c_std)
-    return denoiser, best_state_dict, stats
+    return denoiser, best_state_dict, stats, history
 
 
 # ---------------------------------------------------------------------------

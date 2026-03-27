@@ -53,3 +53,4 @@ diffusion:
   n_layers: 2
   time_dim: 32
   cond_dim: 32
+  num_blocks: 6
