@@ -93,7 +93,7 @@ def main():
             n_qubits=int(ckpt.get("n_qubits", latent_dim)),
             n_layers=int(ckpt.get("n_layers", 2)),
         )
-    elif denoiser_type in ("vqc_angle", "vqc_angle_delta"):
+    elif denoiser_type in ("vqc_angle", "vqc_angle_delta", "vqc_angle_reupload"):
         denoiser = AngleVQCDenoiser(
             latent_dim=latent_dim,
             n_layers=int(ckpt.get("n_layers", 2)),
@@ -101,6 +101,7 @@ def main():
             time_dim=int(ckpt.get("time_dim", 32)),
             cond_dim=int(ckpt.get("cond_dim", 32)),
             use_delta=bool(ckpt.get("use_delta", False)),
+            use_reupload=bool(ckpt.get("use_reupload", False)),
         )
     elif denoiser_type == "vqc_qubit_cond":
         denoiser = QubitCondVQCDenoiser(

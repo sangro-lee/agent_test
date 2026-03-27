@@ -246,6 +246,50 @@ class HybridUNetDenoiser(nn.Module):
         return self.out_head(x)                         # (B, latent_dim)
 
 
+def _make_reupload_vqc_layer(
+    n_qubits: int,
+    n_layers: int,
+    device_type: str,
+) -> "qml.qnn.TorchLayer":
+    """Factory for data re-uploading VQC blocks (Skolik architecture).
+
+    inputs shape: (n_layers * n_qubits,) — pre-scaled by lambda_scales outside the qnode.
+    At each layer l, inputs[l*n_qubits:(l+1)*n_qubits] are re-encoded via AngleEmbedding.
+    """
+    _pi = math.pi
+    dev = qml.device(device_type, wires=n_qubits)
+    params_per_layer = n_qubits * 3 + n_qubits * 3  # rot + entangle
+    weight_shapes = {"theta": (params_per_layer * n_layers,)}
+
+    @qml.qnode(dev, interface="torch", diff_method="backprop")
+    def vqc_circuit(inputs, theta):
+        # inputs: (n_layers * n_qubits,) pre-scaled by λ
+        param_idx = 0
+        for l in range(n_layers):
+            # Data re-uploading: encode at the start of EVERY layer
+            x_l = inputs[l * n_qubits : (l + 1) * n_qubits]
+            qml.AngleEmbedding(x_l * _pi, wires=range(n_qubits), rotation="Y")
+            # Variational rotations
+            for i in range(n_qubits):
+                qml.RZ(theta[param_idx],     wires=i)
+                qml.RY(theta[param_idx + 1], wires=i)
+                qml.RZ(theta[param_idx + 2], wires=i)
+                param_idx += 3
+            # Ring entanglement
+            for p in range(n_qubits):
+                nxt = (p + 1) % n_qubits
+                qml.RZ(-_pi / 2,             wires=nxt)
+                qml.CNOT(wires=[nxt, p])
+                qml.RZ(theta[param_idx],     wires=p)
+                qml.RY(theta[param_idx + 1], wires=nxt)
+                qml.CNOT(wires=[p, nxt])
+                qml.RY(theta[param_idx + 2], wires=nxt)
+                param_idx += 3
+        return [qml.expval(qml.PauliZ(i)) for i in range(n_qubits)]
+
+    return qml.qnn.TorchLayer(vqc_circuit, weight_shapes)
+
+
 def _make_angle_vqc_layer(
     n_qubits: int,
     n_layers: int,
@@ -298,21 +342,23 @@ class AngleVQCDenoiser(nn.Module):
 
     def __init__(
         self,
-        latent_dim:  int = 8,
-        n_layers:    int = 2,       # circuit depth per VQC block
-        num_blocks:  int = 6,       # number of [VQC + CondInj] blocks (matches MLP num_layers)
-        time_dim:    int = 32,
-        cond_dim:    int = 32,
-        device_type: str = "default.qubit",
-        use_delta:   bool = False,  # per-block learnable affine on VQC output (δ1·norm(q)+δ2)
+        latent_dim:   int = 8,
+        n_layers:     int = 2,       # circuit depth per VQC block
+        num_blocks:   int = 6,       # number of [VQC + CondInj] blocks (matches MLP num_layers)
+        time_dim:     int = 32,
+        cond_dim:     int = 32,
+        device_type:  str = "default.qubit",
+        use_delta:    bool = False,  # per-block learnable affine on VQC output (δ1·norm(q)+δ2)
+        use_reupload: bool = False,  # data re-uploading: encode x at start of every layer
     ):
         super().__init__()
-        self.latent_dim = int(latent_dim)
-        self.n_layers   = int(n_layers)
-        self.num_blocks = int(num_blocks)
-        self.time_dim   = int(time_dim)
-        self.cond_dim   = int(cond_dim)
-        self.use_delta  = bool(use_delta)
+        self.latent_dim   = int(latent_dim)
+        self.n_layers     = int(n_layers)
+        self.num_blocks   = int(num_blocks)
+        self.time_dim     = int(time_dim)
+        self.cond_dim     = int(cond_dim)
+        self.use_delta    = bool(use_delta)
+        self.use_reupload = bool(use_reupload)
 
         n_qubits       = self.latent_dim
         cond_embed_dim = time_dim + cond_dim
@@ -326,10 +372,16 @@ class AngleVQCDenoiser(nn.Module):
         )
 
         # ── num_blocks independent VQC circuits ──────────────────────────
-        self.vqc_blocks = nn.ModuleList([
-            _make_angle_vqc_layer(n_qubits, int(n_layers), device_type)
-            for _ in range(num_blocks)
-        ])
+        if use_reupload:
+            self.vqc_blocks = nn.ModuleList([
+                _make_reupload_vqc_layer(n_qubits, int(n_layers), device_type)
+                for _ in range(num_blocks)
+            ])
+        else:
+            self.vqc_blocks = nn.ModuleList([
+                _make_angle_vqc_layer(n_qubits, int(n_layers), device_type)
+                for _ in range(num_blocks)
+            ])
 
         # ── CondInj per block: cond → (w, b) each of size D ──────────────
         # Direct projection (no bottleneck) to preserve conditioning signal.
@@ -348,6 +400,17 @@ class AngleVQCDenoiser(nn.Module):
             ])
             self.deltas2 = nn.ParameterList([
                 nn.Parameter(torch.zeros(n_qubits)) for _ in range(num_blocks)
+            ])
+
+        # ── Data re-uploading: trainable input/output scaling (Skolik) ───
+        if use_reupload:
+            # lambda_scales[b]: (n_layers, n_qubits) — per-layer per-qubit input scale
+            self.lambda_scales = nn.ParameterList([
+                nn.Parameter(torch.ones(n_layers, n_qubits)) for _ in range(num_blocks)
+            ])
+            # output_scales[b]: (n_qubits,) — per-qubit output scale
+            self.output_scales = nn.ParameterList([
+                nn.Parameter(torch.ones(n_qubits)) for _ in range(num_blocks)
             ])
 
         # ── Normalization buffers ─────────────────────────────────────────
@@ -390,12 +453,20 @@ class AngleVQCDenoiser(nn.Module):
 
         x = z_t
         for i, (vqc, c2wb, norm) in enumerate(zip(self.vqc_blocks, self.cond2wb, self.norms)):
-            q_out = vqc(x.cpu().double()).to(x.device).float()  # VQC on CPU (statevector), move back
-            if self.use_delta:
-                d1, d2 = self.deltas1[i], self.deltas2[i]
-                q_out = d1 * norm(q_out) + d2              # per-dim learnable affine
+            if self.use_reupload:
+                # lambda_scales[i]: (n_layers, n_qubits); x: (B, n_qubits)
+                # scaled: (B, n_layers, n_qubits) → flatten to (B, n_layers * n_qubits)
+                scaled = (self.lambda_scales[i] * x.unsqueeze(1))  # broadcast over batch
+                inp = scaled.reshape(x.shape[0], -1)                # (B, n_layers * n_qubits)
+                q_out = vqc(inp.cpu().double()).to(x.device).float()
+                q_out = self.output_scales[i] * norm(q_out)         # trainable output scale
             else:
-                q_out = norm(q_out)
+                q_out = vqc(x.cpu().double()).to(x.device).float()  # VQC on CPU (statevector), move back
+                if self.use_delta:
+                    d1, d2 = self.deltas1[i], self.deltas2[i]
+                    q_out = d1 * norm(q_out) + d2              # per-dim learnable affine
+                else:
+                    q_out = norm(q_out)
             w, b  = c2wb(cond).chunk(2, dim=-1)           # (B, D) each
             x     = x + w * q_out + b                     # residual + AdaIN
 
