@@ -291,10 +291,15 @@ def train_diffusion_cfg(
     best_state_dict = None
     history = []  # list of {"epoch", "train_loss", "val_loss"}
 
+    # Check if model has VQC parameters for gradient monitoring
+    _has_vqc = any("vqc" in n for n, _ in denoiser.named_parameters())
+
     denoiser.train()
     for epoch in range(int(epochs)):
         epoch_loss = 0.0
         n_batches = 0
+        vqc_grad_sum = 0.0
+        cls_grad_sum = 0.0
         for z0_batch, c_batch in loader:
             z0_batch = z0_batch.to(device_t)
             c_batch = c_batch.to(device_t).unsqueeze(1)  # (B, 1)
@@ -312,6 +317,21 @@ def train_diffusion_cfg(
             loss = F.mse_loss(eps_pred, eps)
             opt.zero_grad(set_to_none=True)
             loss.backward()
+
+            if _has_vqc:
+                vqc_norms, cls_norms = [], []
+                for n, p in denoiser.named_parameters():
+                    if p.grad is not None:
+                        norm = p.grad.norm().item()
+                        if "vqc" in n:
+                            vqc_norms.append(norm)
+                        else:
+                            cls_norms.append(norm)
+                if vqc_norms:
+                    vqc_grad_sum += sum(vqc_norms) / len(vqc_norms)
+                if cls_norms:
+                    cls_grad_sum += sum(cls_norms) / len(cls_norms)
+
             opt.step()
 
             epoch_loss += loss.item()
@@ -346,14 +366,20 @@ def train_diffusion_cfg(
         row = {"epoch": epoch + 1, "train_loss": train_loss}
         if val_loss is not None:
             row["val_loss"] = val_loss
+        if _has_vqc:
+            row["vqc_grad_norm"]      = vqc_grad_sum / max(n_batches, 1)
+            row["classical_grad_norm"] = cls_grad_sum / max(n_batches, 1)
         history.append(row)
 
         if (epoch + 1) % 50 == 0:
+            msg = f"  [diffusion cfg] epoch {epoch+1}/{epochs} loss={train_loss:.4f}"
             if val_loss is not None:
-                print(f"  [diffusion cfg] epoch {epoch+1}/{epochs} "
-                      f"train={train_loss:.4f}  val={val_loss:.4f}  best={best_loss:.4f}")
-            else:
-                print(f"  [diffusion cfg] epoch {epoch+1}/{epochs} loss={train_loss:.4f}  best={best_loss:.4f}")
+                msg += f"  val={val_loss:.4f}"
+            msg += f"  best={best_loss:.4f}"
+            if _has_vqc:
+                msg += (f"  vqc_grad={row['vqc_grad_norm']:.2e}"
+                        f"  cls_grad={row['classical_grad_norm']:.2e}")
+            print(msg)
 
     denoiser.eval()
     stats = (z_mean.astype(np.float32), z_std.astype(np.float32), c_mean, c_std)
