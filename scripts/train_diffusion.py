@@ -110,7 +110,8 @@ def main():
         unet_dims = None
     n_layers     = args.n_layers if args.n_layers != 2 else int(diff_cfg.get("n_layers", args.n_layers))
     num_blocks   = int(diff_cfg.get("num_blocks", 6))
-    initial_cnot = bool(diff_cfg.get("initial_cnot", False))
+    initial_cnot  = bool(diff_cfg.get("initial_cnot", False))
+    full_encoding = bool(diff_cfg.get("full_encoding", False))
     time_dim     = args.time_dim if args.time_dim != 32 else int(diff_cfg.get("time_dim", args.time_dim))
     cond_dim   = args.cond_dim if args.cond_dim != 32 else int(diff_cfg.get("cond_dim", args.cond_dim))
 
@@ -138,6 +139,7 @@ def main():
         n_layers=n_layers,
         num_blocks=num_blocks,
         initial_cnot=initial_cnot,
+        full_encoding=full_encoding,
         device=device,
     )
     z_mean, z_std, c_mean, c_std = stats
@@ -167,7 +169,8 @@ def main():
             ckpt["num_blocks"]  = denoiser.num_blocks
             ckpt["use_delta"]    = denoiser.use_delta
             ckpt["use_reupload"] = denoiser.use_reupload
-            ckpt["initial_cnot"] = denoiser.initial_cnot
+            ckpt["initial_cnot"]  = denoiser.initial_cnot
+            ckpt["full_encoding"] = denoiser.full_encoding
             ckpt["time_dim"]     = time_dim
             ckpt["cond_dim"]    = cond_dim
         elif denoiser_type == "vqc_qubit_cond":

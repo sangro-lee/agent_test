@@ -55,3 +55,4 @@ diffusion:
   cond_dim: 32
   num_blocks: 6
   initial_cnot: false
+  full_encoding: false

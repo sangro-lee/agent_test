@@ -361,19 +361,21 @@ class AngleVQCDenoiser(nn.Module):
         time_dim:     int = 32,
         cond_dim:     int = 32,
         device_type:  str = "default.qubit",
-        use_delta:    bool = False,  # per-block learnable affine on VQC output (δ1·norm(q)+δ2)
-        use_reupload: bool = False,  # data re-uploading: encode x at start of every layer
-        initial_cnot: bool = False,  # fixed CNOT ring after initial AngleEmbedding
+        use_delta:     bool = False,  # per-block learnable affine on VQC output (δ1·norm(q)+δ2)
+        use_reupload:  bool = False,  # data re-uploading: encode x at start of every layer
+        initial_cnot:  bool = False,  # fixed CNOT ring after initial AngleEmbedding
+        full_encoding: bool = False,  # full matrix W@x encoding instead of diagonal λ*x
     ):
         super().__init__()
-        self.latent_dim   = int(latent_dim)
-        self.n_layers     = int(n_layers)
-        self.num_blocks   = int(num_blocks)
-        self.time_dim     = int(time_dim)
-        self.cond_dim     = int(cond_dim)
-        self.use_delta    = bool(use_delta)
-        self.use_reupload = bool(use_reupload)
-        self.initial_cnot = bool(initial_cnot)
+        self.latent_dim    = int(latent_dim)
+        self.n_layers      = int(n_layers)
+        self.num_blocks    = int(num_blocks)
+        self.time_dim      = int(time_dim)
+        self.cond_dim      = int(cond_dim)
+        self.use_delta     = bool(use_delta)
+        self.use_reupload  = bool(use_reupload)
+        self.initial_cnot  = bool(initial_cnot)
+        self.full_encoding = bool(full_encoding) and bool(use_reupload)
 
         n_qubits       = self.latent_dim
         cond_embed_dim = time_dim + cond_dim
@@ -419,11 +421,20 @@ class AngleVQCDenoiser(nn.Module):
 
         # ── Data re-uploading: trainable input/output scaling (Skolik) ───
         if use_reupload:
-            # lambda_scales[b]: (n_layers, n_qubits) — per-layer per-qubit input scale
-            self.lambda_scales = nn.ParameterList([
-                nn.Parameter(torch.ones(n_layers, n_qubits)) for _ in range(num_blocks)
-            ])
-            # input_biases[b]: (n_layers, n_qubits) — per-layer per-qubit input bias (UQC: ω·x + α)
+            if self.full_encoding:
+                # weight_matrices[b]: (n_layers, n_qubits, n_qubits) — full W@x encoding
+                # init to identity so W@x = x at start (equivalent to λ=1 diagonal)
+                self.weight_matrices = nn.ParameterList([
+                    nn.Parameter(
+                        torch.eye(n_qubits).unsqueeze(0).repeat(n_layers, 1, 1)
+                    ) for _ in range(num_blocks)
+                ])
+            else:
+                # lambda_scales[b]: (n_layers, n_qubits) — diagonal λ*x encoding
+                self.lambda_scales = nn.ParameterList([
+                    nn.Parameter(torch.ones(n_layers, n_qubits)) for _ in range(num_blocks)
+                ])
+            # input_biases[b]: (n_layers, n_qubits) — per-layer per-qubit bias (UQC: ω·x + α)
             self.input_biases = nn.ParameterList([
                 nn.Parameter(torch.zeros(n_layers, n_qubits)) for _ in range(num_blocks)
             ])
@@ -473,9 +484,14 @@ class AngleVQCDenoiser(nn.Module):
         x = z_t
         for i, (vqc, c2wb, norm) in enumerate(zip(self.vqc_blocks, self.cond2wb, self.norms)):
             if self.use_reupload:
-                # lambda_scales[i]: (n_layers, n_qubits); input_biases[i]: (n_layers, n_qubits)
-                # x: (B, n_qubits) → scaled+biased: (B, n_layers, n_qubits) → (B, n_layers * n_qubits)
-                scaled = self.lambda_scales[i] * x.unsqueeze(1) + self.input_biases[i]
+                if self.full_encoding:
+                    # weight_matrices[i]: (n_layers, D, D); x: (B, D)
+                    # einsum → (B, n_layers, D): each qubit gets W@x (full linear mix)
+                    scaled = torch.einsum('lod,bd->blo', self.weight_matrices[i], x) \
+                             + self.input_biases[i]
+                else:
+                    # lambda_scales[i]: (n_layers, D); diagonal λ*x per qubit
+                    scaled = self.lambda_scales[i] * x.unsqueeze(1) + self.input_biases[i]
                 inp = scaled.reshape(x.shape[0], -1)                # (B, n_layers * n_qubits)
                 q_out = vqc(inp.cpu().double()).to(x.device).float()
                 q_out = self.output_scales[i] * norm(q_out)         # trainable output scale
