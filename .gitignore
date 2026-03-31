@@ -42,3 +42,8 @@ scripts/visualize_vqc.py
 
 # OS
 .DS_Store
+
+# local-only directories
+Substructure-Mask-Explanation/
+history/
+visual.py
