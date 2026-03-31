@@ -211,14 +211,18 @@ def main():
         pred_val_loader = make_sme_loader(val_idx, shuffle=False)
         pred_test_loader = make_sme_loader(test_idx, shuffle=False)
 
-        # VQC mode: sme_ffn_hidden = VQC input dim; non-VQC: sme_ffn_hidden = latent_dim
-        sme_ffn = int(model_cfg.get("sme_ffn_hidden", 256)) if use_vqc else latent_dim
+        _ffn_dims_cfg = model_cfg.get("sme_ffn_dims")
+        if _ffn_dims_cfg is not None:
+            sme_kwargs = {"ffn_dims": [int(d) for d in _ffn_dims_cfg] + [latent_dim]}
+        else:
+            sme_ffn = int(model_cfg.get("sme_ffn_hidden", 256)) if use_vqc else latent_dim
+            sme_kwargs = {"ffn_hidden": sme_ffn}
         backbone = SMERGCNModel(
             in_feats=SME_NODE_DIM,
             hidden_feats=list(model_cfg.get("sme_hidden_feats", [200, 200])),
-            ffn_hidden=sme_ffn,
             rgcn_dropout=float(model_cfg.get("sme_rgcn_dropout", 0.25)),
             ffn_dropout=float(model_cfg.get("sme_ffn_dropout", 0.25)),
+            **sme_kwargs,
         )
         is_graph = True
 

@@ -170,13 +170,18 @@ def main():
             )
             return PyGDataLoader(ds, batch_size=batch_size, shuffle=False)
 
-        sme_ffn = int(model_cfg.get("sme_ffn_hidden", 256)) if use_vqc else latent_dim
+        _ffn_dims_cfg = model_cfg.get("sme_ffn_dims")
+        if _ffn_dims_cfg is not None:
+            sme_kwargs = {"ffn_dims": [int(d) for d in _ffn_dims_cfg] + [latent_dim]}
+        else:
+            sme_ffn = int(model_cfg.get("sme_ffn_hidden", 256)) if use_vqc else latent_dim
+            sme_kwargs = {"ffn_hidden": sme_ffn}
         backbone = SMERGCNModel(
             in_feats=SME_NODE_DIM,
             hidden_feats=list(model_cfg.get("sme_hidden_feats", [256, 256])),
-            ffn_hidden=sme_ffn,
             rgcn_dropout=float(model_cfg.get("sme_rgcn_dropout", 0.25)),
             ffn_dropout=float(model_cfg.get("sme_ffn_dropout", 0.25)),
+            **sme_kwargs,
         )
         is_graph = True
 

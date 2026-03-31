@@ -151,12 +151,18 @@ def main() -> None:
         smask_type = str(feat_cfg.get("smask_type", "brics"))
         ds = SMEMolDataset(smiles_list, [0.0] * len(smiles_list), smask_type=smask_type)
         loader = PyGDataLoader(ds, batch_size=batch_size, shuffle=False)
+        _ffn_dims_cfg = model_cfg.get("sme_ffn_dims")
+        if _ffn_dims_cfg is not None:
+            _latent_dim = int(model_cfg.get("latent_dim", 8))
+            sme_kwargs = {"ffn_dims": [int(d) for d in _ffn_dims_cfg] + [_latent_dim]}
+        else:
+            sme_kwargs = {"ffn_hidden": int(model_cfg.get("sme_ffn_hidden", 200))}
         model = SMERGCNModel(
             in_feats=SME_NODE_DIM,
             hidden_feats=list(model_cfg.get("sme_hidden_feats", [200, 200])),
-            ffn_hidden=int(model_cfg.get("sme_ffn_hidden", 200)),
             rgcn_dropout=float(model_cfg.get("sme_rgcn_dropout", 0.25)),
             ffn_dropout=float(model_cfg.get("sme_ffn_dropout", 0.25)),
+            **sme_kwargs,
         )
         is_graph = True
 

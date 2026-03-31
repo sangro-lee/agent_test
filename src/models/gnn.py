@@ -208,6 +208,7 @@ class SMERGCNModel(nn.Module):
         in_feats: int = 40,
         hidden_feats: list = None,
         ffn_hidden: int = 200,
+        ffn_dims: list = None,
         num_rels: int = SME_NUM_RELS,
         rgcn_dropout: float = 0.25,
         ffn_dropout: float = 0.25,
@@ -229,7 +230,6 @@ class SMERGCNModel(nn.Module):
         # Smask-weighted pooling (readout)
         self.readout = _SMEWeightedPool(cur_dim)
 
-        # 3-layer MLP head (matches SME's fc_layers1/2/3 + predict)
         def _fc(in_d, out_d):
             return nn.Sequential(
                 nn.Dropout(ffn_dropout),
@@ -238,12 +238,24 @@ class SMERGCNModel(nn.Module):
                 nn.BatchNorm1d(out_d),
             )
 
-        self.fc1 = _fc(cur_dim, ffn_hidden)
-        self.fc2 = _fc(ffn_hidden, ffn_hidden)
-        self.fc3 = _fc(ffn_hidden, ffn_hidden)
-        self.out_layer = nn.Linear(ffn_hidden, 1)
-
-        self._latent_dim = ffn_hidden
+        if ffn_dims is not None:
+            # Funnel architecture: ffn_dims = [128, 64, latent_dim]
+            self.fc_layers = nn.ModuleList()
+            in_d = cur_dim
+            for out_d in ffn_dims:
+                self.fc_layers.append(_fc(in_d, out_d))
+                in_d = out_d
+            self.out_layer = nn.Linear(in_d, 1)
+            self._latent_dim = in_d
+            self._use_ffn_dims = True
+        else:
+            # Legacy flat architecture: 3 layers of ffn_hidden
+            self.fc1 = _fc(cur_dim, ffn_hidden)
+            self.fc2 = _fc(ffn_hidden, ffn_hidden)
+            self.fc3 = _fc(ffn_hidden, ffn_hidden)
+            self.out_layer = nn.Linear(ffn_hidden, 1)
+            self._latent_dim = ffn_hidden
+            self._use_ffn_dims = False
 
     def forward(self, data):
         """
@@ -276,9 +288,15 @@ class SMERGCNModel(nn.Module):
         graph_feat = self.readout(x, smask, batch)  # (B, hidden)
 
         # MLP head
-        h = self.fc1(graph_feat)
-        h = self.fc2(h)
-        latent = self.fc3(h)
+        if self._use_ffn_dims:
+            h = graph_feat
+            for layer in self.fc_layers:
+                h = layer(h)
+            latent = h
+        else:
+            h = self.fc1(graph_feat)
+            h = self.fc2(h)
+            latent = self.fc3(h)
         pred = self.out_layer(latent).view(-1)
 
         return pred, latent
