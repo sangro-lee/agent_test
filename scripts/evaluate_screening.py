@@ -17,6 +17,7 @@ Usage:
   python scripts/evaluate_screening.py --csv top_candidates.csv  # use combined pool
 """
 import argparse
+import json
 import math
 import sys
 from pathlib import Path
@@ -92,19 +93,27 @@ def main():
         m["exp"]     = _exp_name(csv_path)
         m["run_tag"] = _run_tag(csv_path)
         m["path"]    = str(csv_path)
+        _div_path = csv_path.parent / "diversity.json"
+        if _div_path.exists():
+            with open(_div_path) as _f:
+                _div = json.load(_f)
+            m["latent_ratio"] = _div.get("ratio")
+        else:
+            m["latent_ratio"] = None
         rows.append(m)
 
     result = pd.DataFrame(rows).sort_values("mean_actual", ascending=False)
 
     # ── Print table ────────────────────────────────────────────────────────
     print(f"\n{'Experiment/Run':<45} {'n':>4}  {'mean_actual':>11}  {'max_actual':>10}  "
-          f"{'hit_rate':>8}  {'mean_pred':>9}")
-    print("-" * 95)
+          f"{'hit_rate':>8}  {'mean_pred':>9}  {'div_ratio':>9}")
+    print("-" * 107)
     for _, r in result.iterrows():
         tag = r['run_tag'].replace('\n', '/')
+        ratio_str = f"{r['latent_ratio']:>9.3f}" if pd.notna(r['latent_ratio']) else f"{'N/A':>9}"
         print(f"{tag:<45} {int(r['n']) if not math.isnan(r['n']) else 0:>4}  "
               f"{r['mean_actual']:>11.4f}  {r['max_actual']:>10.4f}  "
-              f"{r['hit_rate']:>8.2%}  {r['mean_pred']:>9.4f}")
+              f"{r['hit_rate']:>8.2%}  {r['mean_pred']:>9.4f}  {ratio_str}")
 
     # ── Bar chart ──────────────────────────────────────────────────────────
     valid_rows = result[result["n"] > 0].reset_index(drop=True)

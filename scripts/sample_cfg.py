@@ -214,14 +214,18 @@ def main():
     _train_latent_path = Path(run_dir) / "latents_train.npy"
     if _train_latent_path.exists():
         _z_train = np.load(_train_latent_path)
-        _train_std = _z_train.std(axis=0).mean()
-        _ratio = z_std_per_dim.mean() / (_train_std + 1e-8)
-        print(f"[sample_cfg] latent diversity: mean_std={z_std_per_dim.mean():.4f}  "
+        _train_std = float(_z_train.std(axis=0).mean())
+        _ratio = float(z_std_per_dim.mean()) / (_train_std + 1e-8)
+        _diversity_data = {"mean_std": float(z_std_per_dim.mean()),
+                           "train_std": _train_std, "ratio": _ratio}
+        print(f"[sample_cfg] latent diversity: mean_std={_diversity_data['mean_std']:.4f}  "
               f"train_std={_train_std:.4f}  ratio={_ratio:.3f}  "
               f"({'OK' if _ratio > 0.7 else 'low' if _ratio > 0.3 else 'COLLAPSE'})")
     else:
-        print(f"[sample_cfg] latent diversity: mean_std={z_std_per_dim.mean():.4f}  "
-              f"min_std={z_std_per_dim.min():.4f}  max_std={z_std_per_dim.max():.4f}")
+        _diversity_data = {"mean_std": float(z_std_per_dim.mean()),
+                           "train_std": None, "ratio": None}
+        print(f"[sample_cfg] latent diversity: mean_std={_diversity_data['mean_std']:.4f}  "
+              f"min_std={float(z_std_per_dim.min()):.4f}  max_std={float(z_std_per_dim.max()):.4f}")
 
     # ---- Score via reg_head (last linear layer of encoder) ----------------
     # Load encoder model to score sampled latents
@@ -296,6 +300,10 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     np.save(out_dir / "z_samples.npy", z_samples)
+
+    import json
+    with open(out_dir / "diversity.json", "w") as _f:
+        json.dump(_diversity_data, _f)
 
     all_rows = []
     for pool_name, (z_pool, smiles_pool, y_lookup) in retrieval_pools.items():
