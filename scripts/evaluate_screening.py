@@ -97,23 +97,26 @@ def main():
         if _div_path.exists():
             with open(_div_path) as _f:
                 _div = json.load(_f)
-            m["latent_ratio"] = _div.get("ratio")
+            m["topk_ratio"] = _div.get("topk_ratio")   # top-k selected latents
+            m["div_ratio"]  = _div.get("ratio")         # all samples (reference)
         else:
-            m["latent_ratio"] = None
+            m["topk_ratio"] = None
+            m["div_ratio"]  = None
         rows.append(m)
 
     result = pd.DataFrame(rows).sort_values("mean_actual", ascending=False)
 
     # ── Print table ────────────────────────────────────────────────────────
     print(f"\n{'Experiment/Run':<45} {'n':>4}  {'mean_actual':>11}  {'max_actual':>10}  "
-          f"{'hit_rate':>8}  {'mean_pred':>9}  {'div_ratio':>9}")
-    print("-" * 107)
+          f"{'hit_rate':>8}  {'mean_pred':>9}  {'topk_div':>8}  {'all_div':>7}")
+    print("-" * 115)
     for _, r in result.iterrows():
         tag = r['run_tag'].replace('\n', '/')
-        ratio_str = f"{r['latent_ratio']:>9.3f}" if pd.notna(r['latent_ratio']) else f"{'N/A':>9}"
+        topk_str = f"{r['topk_ratio']:>8.3f}" if pd.notna(r.get('topk_ratio')) else f"{'N/A':>8}"
+        div_str  = f"{r['div_ratio']:>7.3f}"  if pd.notna(r.get('div_ratio'))  else f"{'N/A':>7}"
         print(f"{tag:<45} {int(r['n']) if not math.isnan(r['n']) else 0:>4}  "
               f"{r['mean_actual']:>11.4f}  {r['max_actual']:>10.4f}  "
-              f"{r['hit_rate']:>8.2%}  {r['mean_pred']:>9.4f}  {ratio_str}")
+              f"{r['hit_rate']:>8.2%}  {r['mean_pred']:>9.4f}  {topk_str}  {div_str}")
 
     # ── Bar chart ──────────────────────────────────────────────────────────
     valid_rows = result[result["n"] > 0].reset_index(drop=True)

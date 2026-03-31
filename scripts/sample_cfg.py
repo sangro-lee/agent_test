@@ -295,6 +295,18 @@ def main():
     print(f"[sample_cfg] top-{len(top_indices)} / {len(z_samples)} latents  "
           f"pred range: {pred_batch[top_indices].min():.3f} ~ {pred_batch[top_indices].max():.3f}")
 
+    # Diversity of top-k selected latents (the actual candidates)
+    _z_topk = z_samples[top_indices]
+    _topk_std = float(_z_topk.std(axis=0).mean()) if len(top_indices) > 1 else 0.0
+    _train_std_ref = _diversity_data.get("train_std")
+    _topk_ratio = _topk_std / (_train_std_ref + 1e-8) if _train_std_ref else None
+    _diversity_data["topk_std"] = _topk_std
+    _diversity_data["topk_ratio"] = _topk_ratio
+    if _topk_ratio is not None:
+        print(f"[sample_cfg] top-k diversity: topk_std={_topk_std:.4f}  "
+              f"topk_ratio={_topk_ratio:.3f}  "
+              f"({'OK' if _topk_ratio > 0.7 else 'low' if _topk_ratio > 0.3 else 'COLLAPSE'})")
+
     w_tag = f"cfg_w{args.guidance_scale:.1f}_{args.sampler}"
     out_dir = Path(run_dir) / _diff_subdir / w_tag
     out_dir.mkdir(parents=True, exist_ok=True)
