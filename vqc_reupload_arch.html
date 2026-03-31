@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>AngleVQCDenoiser (Re-uploading) Architecture</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: 'Consolas', monospace; background: #13131f; color: #e0e0e0; margin: 0; padding: 28px; }
+  h1 { text-align: center; color: #a8d8ea; font-size: 1.3em; margin-bottom: 2px; }
+  h2 { color: #a8d8ea; font-size: 1.0em; margin: 28px 0 10px 0; border-bottom: 1px solid #2a2a3a; padding-bottom: 4px; }
+  .subtitle { text-align: center; color: #666; font-size: 0.8em; margin-bottom: 32px; }
+
+  .page { display: flex; gap: 40px; justify-content: center; align-items: flex-start; flex-wrap: wrap; }
+  .col { display: flex; flex-direction: column; align-items: center; }
+
+  /* arrows */
+  .arr { width: 2px; height: 18px; background: #444; margin: 0 auto; position: relative; }
+  .arr::after { content: '▼'; position: absolute; bottom: -13px; left: 50%; transform: translateX(-50%); color: #444; font-size: 11px; }
+  .arr-lg { height: 28px; }
+
+  /* generic box */
+  .box { border-radius: 8px; padding: 8px 14px; text-align: center; font-size: 0.8em; line-height: 1.7; width: 290px; }
+
+  /* box variants */
+  .io    { background: #16213e; border: 2px solid #4a90d9; }
+  .cls   { background: #1a2a1a; border: 2px solid #27ae60; }  /* classical */
+  .qc    { background: #1e1030; border: 2px solid #9b59b6; }  /* quantum circuit */
+  .qin   { background: #261040; border: 1px solid #8e44ad; border-radius: 6px; padding: 7px 12px; font-size: 0.76em; margin: 3px 0; width: 260px; }
+  .qlayer{ background: #1a0e35; border: 1px dashed #7d3c98; border-radius: 6px; padding: 6px 12px; font-size: 0.75em; margin: 3px 0; width: 260px; }
+  .qout  { background: #16213e; border: 2px solid #4a90d9; }
+  .cond  { background: #1b2631; border: 2px solid #f39c12; }
+  .res   { background: #2a1a0a; border: 2px solid #e67e22; }
+
+  .dim   { color: #a8d8ea; font-weight: bold; }
+  .eq    { color: #f0e68c; font-size: 0.82em; }
+  .note  { color: #888; font-size: 0.74em; margin-top: 3px; }
+  .tag   { display: inline-block; border-radius: 3px; padding: 1px 6px; font-size: 0.72em; margin-top: 3px; }
+  .tag-q { background: #3a1855; color: #d7bde2; border: 1px solid #8e44ad; }
+  .tag-c { background: #0a2a0a; color: #82e0aa; border: 1px solid #27ae60; }
+  .tag-r { background: #2a1500; color: #f5cba7; border: 1px solid #e67e22; }
+
+  .sep { width: 260px; border: none; border-top: 1px solid #2a2a3a; margin: 4px auto; }
+
+  /* concept table */
+  table { border-collapse: collapse; font-size: 0.78em; margin: 0 auto; }
+  th { background: #1e1e2e; color: #a8d8ea; padding: 6px 14px; border: 1px solid #2a2a3a; }
+  td { padding: 5px 14px; border: 1px solid #2a2a3a; color: #ccc; }
+  tr:nth-child(even) td { background: #181828; }
+
+  /* repeat bracket */
+  .repeat-wrap { position: relative; display: flex; flex-direction: column; align-items: center; }
+  .repeat-label { font-size: 0.72em; color: #e67e22; border: 1px dashed #e67e22; border-radius: 4px; padding: 2px 10px; margin-bottom: 4px; }
+  .bracket-box { border: 1px dashed #e67e22; border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; align-items: center; gap: 0; }
+
+  .full-arr { display: flex; align-items: center; gap: 6px; color: #666; font-size: 0.74em; margin: 2px 0; }
+  .lr { width: 60px; height: 1px; background: #444; }
+</style>
+</head>
+<body>
+
+<h1>AngleVQCDenoiser — Data Re-uploading Architecture</h1>
+<div class="subtitle">Skolik (2021) + Pérez-Salinas UQC style · latent_dim = n_qubits = D</div>
+
+<div class="page">
+
+  <!-- LEFT: full denoiser flow -->
+  <div>
+    <h2>① Full Denoiser Block (num_blocks 반복)</h2>
+    <div class="col">
+
+      <div class="box io">
+        <span class="dim">z_t (B, D)</span><br>
+        <span class="note">noisy latent vector</span>
+      </div>
+      <div class="arr arr-lg"></div>
+
+      <div class="box cond">
+        <b>Condition Embedding</b><br>
+        <span class="eq">t → time_mlp → (B, time_dim)</span><br>
+        <span class="eq">c → cond_mlp → (B, cond_dim)</span><br>
+        <span class="eq">cond = cat([t_emb, c_emb]) (B, time_dim+cond_dim)</span>
+        <div class="note">한 번 계산, 모든 block에서 공유</div>
+      </div>
+      <div class="arr arr-lg"></div>
+
+      <!-- repeat bracket -->
+      <div class="repeat-wrap">
+        <div class="repeat-label">× num_blocks</div>
+        <div class="bracket-box">
+
+          <div class="box cls">
+            <b>Input Scaling</b> <span class="tag tag-c">classical</span><br>
+            <span class="eq">scaled = λ[l] · x + β[l]</span><br>
+            <span class="note">λ, β ∈ ℝ<sup>D</sup> per layer · learnable · init: λ=1, β=0</span><br>
+            <span class="eq">inp = reshape → (B, n_layers·D)</span>
+          </div>
+          <div class="arr"></div>
+
+          <div class="box qc">
+            <b>VQC Circuit</b> <span class="tag tag-q">quantum</span><br>
+            <div class="sep"></div>
+
+            <div class="qin">
+              <b>AngleEmbedding</b> (layer 0)<br>
+              <span class="eq">Ry( (λ[0]·x + β[0]) · π )</span><br>
+              <span class="note">wires 0…D-1</span>
+            </div>
+
+            <div class="qlayer">
+              <b>Variational Layer 1</b><br>
+              <span class="eq">RZ·RY·RZ per qubit</span><br>
+              <span class="eq">CNOT ring entanglement</span>
+            </div>
+
+            <div class="qin">
+              <b>AngleEmbedding</b> (layer 1) <span style="color:#e67e22;">← re-upload</span><br>
+              <span class="eq">Ry( (λ[1]·x + β[1]) · π )</span><br>
+              <span class="note">이전 quantum state 위에 추가 회전</span>
+            </div>
+
+            <div class="qlayer">
+              <b>Variational Layer 2</b><br>
+              <span class="eq">RZ·RY·RZ per qubit</span><br>
+              <span class="eq">CNOT ring entanglement</span>
+            </div>
+
+            <div class="sep"></div>
+            <span class="note">⟨Z_i⟩ for i=0…D-1 → <span class="dim">(B, D)</span></span>
+          </div>
+          <div class="arr"></div>
+
+          <div class="box cls">
+            <b>Output Scaling</b> <span class="tag tag-c">classical</span><br>
+            <span class="eq">q_out = output_scales · LayerNorm(q_out)</span><br>
+            <span class="note">output_scales ∈ ℝ<sup>D</sup> · learnable · init: 1</span><br>
+            <span class="note">bias 없음 (LayerNorm 자체 affine 있음)</span>
+          </div>
+          <div class="arr"></div>
+
+          <div class="box cond">
+            <b>cond2wb</b> (AdaIN-style)<br>
+            <span class="eq">w, b = Linear(cond → 2D).chunk(2)</span><br>
+            <span class="eq">x = x + w · q_out + b</span>
+            <div class="tag tag-r">residual</div>
+          </div>
+
+        </div><!-- bracket-box -->
+      </div><!-- repeat-wrap -->
+
+      <div class="arr arr-lg"></div>
+      <div class="box io">
+        <span class="dim">ε̂ (B, D)</span><br>
+        <span class="note">predicted noise</span>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- RIGHT: parameter table + concept -->
+  <div style="max-width:340px;">
+
+    <h2>② 파라미터 형태 (latent_dim=D, n_layers=L, num_blocks=K)</h2>
+    <table>
+      <tr><th>이름</th><th>shape</th><th>init</th><th>위치</th></tr>
+      <tr><td>lambda_scales</td><td>(K, L, D)</td><td>1</td><td>classical (밖)</td></tr>
+      <tr><td>input_biases</td><td>(K, L, D)</td><td>0</td><td>classical (밖)</td></tr>
+      <tr><td>output_scales</td><td>(K, D)</td><td>1</td><td>classical (밖)</td></tr>
+      <tr><td>VQC theta</td><td>(K, 6·L·D)</td><td>random</td><td>TorchLayer (회로 파라미터)</td></tr>
+      <tr><td>cond2wb</td><td>Linear(…→2D)</td><td>—</td><td>classical MLP</td></tr>
+    </table>
+
+    <h2>③ Re-uploading 핵심 개념</h2>
+    <table>
+      <tr><th></th><th>Standard VQC</th><th>Re-uploading (ours)</th></tr>
+      <tr><td>데이터 인코딩</td><td>처음 한 번</td><td>매 variational layer 앞</td></tr>
+      <tr><td>입력 형태</td><td>(B, D)</td><td>(B, L·D) — L개 scaled copy</td></tr>
+      <tr><td>input scaling</td><td>없음</td><td>λ[l]·x + β[l] per layer</td></tr>
+      <tr><td>gradient (λ)</td><td>—</td><td>∂f/∂λ = x·π · ∂f/∂angle (chain rule)</td></tr>
+      <tr><td>λ 최적화</td><td>—</td><td>PyTorch Adam (회로 밖 classical)</td></tr>
+    </table>
+
+    <h2>④ Re-uploading이 표현력을 높이는 이유</h2>
+    <div style="font-size:0.8em; line-height:1.8; color:#ccc; background:#1a1a2a; border-radius:8px; padding:14px 16px; border:1px solid #2a2a3a;">
+      <b style="color:#a8d8ea;">AngleEmbedding은 리셋이 아니라 추가 회전이다.</b><br><br>
+      Layer 1 이후 큐비트는 superposition + entanglement 상태.<br>
+      두 번째 AngleEmbedding은 이 상태 위에 Ry(λ·x·π)를 추가로 적용.<br><br>
+      → 입력 데이터가 깊은 층에서도 영향력을 유지<br>
+      → 고전 NN의 dense skip connection과 유사한 효과<br>
+      → barren plateau 완화에도 기여 (gradient 흐름 개선)<br><br>
+      <b style="color:#f0e68c;">λ[l] ≠ λ[l']</b> — 레이어마다 다른 scale로 x를 재주입.<br>
+      각 레이어가 "얼마나 강하게" 원본 정보를 받아들일지 학습.
+    </div>
+
+    <h2>⑤ 레퍼런스</h2>
+    <div style="font-size:0.75em; color:#888; line-height:1.8; background:#1a1a2a; border-radius:8px; padding:10px 14px; border:1px solid #2a2a3a;">
+      Skolik et al. (2021) — <i>Layerwise learning for quantum neural networks</i><br>
+      Pérez-Salinas et al. (2020) — <i>Data re-uploading for a universal quantum classifier</i><br>
+      (Quantum 4, 226) — UQC encoding: U(x;ω,α) = Ry(2φ)Rz(2ω·x+2α)
+    </div>
+
+  </div>
+
+</div><!-- page -->
+</body>
+</html>
