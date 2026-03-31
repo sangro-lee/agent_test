@@ -97,11 +97,12 @@ def main():
     result = pd.DataFrame(rows).sort_values("mean_actual", ascending=False)
 
     # ── Print table ────────────────────────────────────────────────────────
-    print(f"\n{'Experiment':<35} {'n':>4}  {'mean_actual':>11}  {'max_actual':>10}  "
+    print(f"\n{'Experiment/Run':<45} {'n':>4}  {'mean_actual':>11}  {'max_actual':>10}  "
           f"{'hit_rate':>8}  {'mean_pred':>9}")
-    print("-" * 85)
+    print("-" * 95)
     for _, r in result.iterrows():
-        print(f"{r['exp']:<35} {int(r['n']) if not math.isnan(r['n']) else 0:>4}  "
+        tag = r['run_tag'].replace('\n', '/')
+        print(f"{tag:<45} {int(r['n']) if not math.isnan(r['n']) else 0:>4}  "
               f"{r['mean_actual']:>11.4f}  {r['max_actual']:>10.4f}  "
               f"{r['hit_rate']:>8.2%}  {r['mean_pred']:>9.4f}")
 
@@ -150,7 +151,9 @@ def main():
 
     # Save summary CSV
     csv_out = Path(args.out).with_suffix(".csv")
-    result.drop(columns=["run_tag", "path"]).to_csv(csv_out, index=False)
+    result_csv = result.copy()
+    result_csv["run_tag"] = result_csv["run_tag"].str.replace('\n', '/', regex=False)
+    result_csv.drop(columns=["path"]).to_csv(csv_out, index=False)
     print(f"Saved: {csv_out}")
 
 
