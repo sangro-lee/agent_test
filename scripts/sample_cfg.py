@@ -245,9 +245,11 @@ def main():
                 hidden_dim=int(model_cfg.get("gnn_hidden", 200)),
                 num_layers=int(model_cfg.get("gnn_layers", 3)))
         elif feature_type == "sme_graph":
+            use_vqc_enc = str(model_cfg.get("type", "")).lower() == "vqc"
+            sme_ffn = int(model_cfg.get("sme_ffn_hidden", 256)) if use_vqc_enc else latent_dim
             model = SMERGCNModel(in_feats=SME_NODE_DIM,
                 hidden_feats=list(model_cfg.get("sme_hidden_feats", [200, 200])),
-                ffn_hidden=int(model_cfg.get("sme_ffn_hidden", 200)))
+                ffn_hidden=sme_ffn)
         else:
             raise ValueError(f"Unknown feature type: {feature_type}")
 
