@@ -61,12 +61,14 @@ def compute_metrics(df: pd.DataFrame, threshold: float) -> dict:
             "hit_rate":    float("nan"),
             "mean_pred":   float(df["pred_pIC50"].mean()) if len(df) else float("nan"),
         }
+    mean_sim = float(valid["cosine_sim"].mean()) if "cosine_sim" in valid.columns else float("nan")
     return {
         "n":           len(valid),
         "mean_actual": float(valid["actual_pIC50"].mean()),
         "max_actual":  float(valid["actual_pIC50"].max()),
         "hit_rate":    float((valid["actual_pIC50"] >= threshold).mean()),
         "mean_pred":   float(valid["pred_pIC50"].mean()),
+        "mean_sim":    mean_sim,
     }
 
 
@@ -108,15 +110,16 @@ def main():
 
     # ── Print table ────────────────────────────────────────────────────────
     print(f"\n{'Experiment/Run':<45} {'n':>4}  {'mean_actual':>11}  {'max_actual':>10}  "
-          f"{'hit_rate':>8}  {'mean_pred':>9}  {'topk_div':>8}  {'all_div':>7}")
-    print("-" * 115)
+          f"{'hit_rate':>8}  {'mean_pred':>9}  {'mean_sim':>8}  {'topk_div':>8}  {'all_div':>7}")
+    print("-" * 126)
     for _, r in result.iterrows():
         tag = r['run_tag'].replace('\n', '/')
         topk_str = f"{r['topk_ratio']:>8.3f}" if pd.notna(r.get('topk_ratio')) else f"{'N/A':>8}"
         div_str  = f"{r['div_ratio']:>7.3f}"  if pd.notna(r.get('div_ratio'))  else f"{'N/A':>7}"
+        sim_str  = f"{r['mean_sim']:>8.4f}"   if pd.notna(r.get('mean_sim'))   else f"{'N/A':>8}"
         print(f"{tag:<45} {int(r['n']) if not math.isnan(r['n']) else 0:>4}  "
               f"{r['mean_actual']:>11.4f}  {r['max_actual']:>10.4f}  "
-              f"{r['hit_rate']:>8.2%}  {r['mean_pred']:>9.4f}  {topk_str}  {div_str}")
+              f"{r['hit_rate']:>8.2%}  {r['mean_pred']:>9.4f}  {sim_str}  {topk_str}  {div_str}")
 
     # ── Bar chart ──────────────────────────────────────────────────────────
     valid_rows = result[result["n"] > 0].reset_index(drop=True)
