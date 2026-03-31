@@ -317,6 +317,41 @@ def main():
     with open(out_dir / "diversity.json", "w") as _f:
         json.dump(_diversity_data, _f)
 
+    # t-SNE: train vs sampled vs top-k selected
+    try:
+        from sklearn.manifold import TSNE
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as _plt
+
+        if _train_latent_path.exists():
+            _z_train_tsne = np.load(_train_latent_path)
+            _n_train = len(_z_train_tsne)
+            _combined = np.vstack([_z_train_tsne, z_samples])
+            _perp = min(30, max(5, len(_combined) // 10))
+            _emb = TSNE(n_components=2, perplexity=_perp, random_state=42,
+                        n_iter=1000).fit_transform(_combined)
+            _emb_train = _emb[:_n_train]
+            _emb_all   = _emb[_n_train:]
+            _emb_topk  = _emb_all[top_indices]
+
+            _fig, _ax = _plt.subplots(figsize=(7, 6))
+            _ax.scatter(_emb_train[:, 0], _emb_train[:, 1],
+                        s=8, alpha=0.25, c="gray", label=f"train ({_n_train})")
+            _ax.scatter(_emb_all[:, 0], _emb_all[:, 1],
+                        s=8, alpha=0.35, c="steelblue", label=f"sampled ({len(z_samples)})")
+            _ax.scatter(_emb_topk[:, 0], _emb_topk[:, 1],
+                        s=25, alpha=0.9, c="tomato", label=f"top-{len(top_indices)} selected")
+            _ax.set_title(f"t-SNE latent space — {w_tag}")
+            _ax.legend(fontsize=8)
+            _ax.grid(True, alpha=0.3)
+            _fig.tight_layout()
+            _fig.savefig(out_dir / "tsne.png", dpi=150, bbox_inches="tight")
+            _plt.close(_fig)
+            print(f"[sample_cfg] t-SNE → {out_dir / 'tsne.png'}")
+    except Exception as _e:
+        print(f"[sample_cfg] t-SNE skipped: {_e}")
+
     all_rows = []
     for pool_name, (z_pool, smiles_pool, y_lookup) in retrieval_pools.items():
         rows = []
