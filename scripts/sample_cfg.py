@@ -330,7 +330,7 @@ def main():
             _combined = np.vstack([_z_train_tsne, z_samples])
             _perp = min(30, max(5, len(_combined) // 10))
             _emb = TSNE(n_components=2, perplexity=_perp, random_state=42,
-                        n_iter=1000).fit_transform(_combined)
+                        max_iter=1000).fit_transform(_combined)
             _emb_train = _emb[:_n_train]
             _emb_all   = _emb[_n_train:]
             _emb_topk  = _emb_all[top_indices]
