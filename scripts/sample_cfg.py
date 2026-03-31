@@ -209,6 +209,20 @@ def main():
         device=device,
     )
 
+    # Latent diversity diagnostic (compare to train latents)
+    z_std_per_dim = z_samples.std(axis=0)
+    _train_latent_path = Path(run_dir) / "latents_train.npy"
+    if _train_latent_path.exists():
+        _z_train = np.load(_train_latent_path)
+        _train_std = _z_train.std(axis=0).mean()
+        _ratio = z_std_per_dim.mean() / (_train_std + 1e-8)
+        print(f"[sample_cfg] latent diversity: mean_std={z_std_per_dim.mean():.4f}  "
+              f"train_std={_train_std:.4f}  ratio={_ratio:.3f}  "
+              f"({'OK' if _ratio > 0.7 else 'low' if _ratio > 0.3 else 'COLLAPSE'})")
+    else:
+        print(f"[sample_cfg] latent diversity: mean_std={z_std_per_dim.mean():.4f}  "
+              f"min_std={z_std_per_dim.min():.4f}  max_std={z_std_per_dim.max():.4f}")
+
     # ---- Score via reg_head (last linear layer of encoder) ----------------
     # Load encoder model to score sampled latents
     from src.utils.io import load_checkpoint
@@ -274,6 +288,8 @@ def main():
     # ---- Retrieve nearest molecules per split / screening pool ------------
     order = np.argsort(-pred_batch)
     top_indices = order[: min(args.top_k, len(order))]
+    print(f"[sample_cfg] top-{len(top_indices)} / {len(z_samples)} latents  "
+          f"pred range: {pred_batch[top_indices].min():.3f} ~ {pred_batch[top_indices].max():.3f}")
 
     w_tag = f"cfg_w{args.guidance_scale:.1f}_{args.sampler}"
     out_dir = Path(run_dir) / _diff_subdir / w_tag
@@ -295,8 +311,11 @@ def main():
                     "source": pool_name,
                 })
 
+        _rows_df = pd.DataFrame(rows)
+        n_retrieved = len(_rows_df)
+        n_unique = _rows_df["smiles"].nunique()
         pool_df = (
-            pd.DataFrame(rows)
+            _rows_df
             .sort_values(["pred_pIC50", "cosine_sim"], ascending=[False, False])
             .drop_duplicates(subset=["smiles"], keep="first")
             .head(args.top_k)
@@ -304,7 +323,8 @@ def main():
         )
         pool_df.to_csv(out_dir / f"top_candidates_{pool_name}.csv", index=False)
         all_rows.append(pool_df)
-        print(f"[sample_cfg] {pool_name}: {len(pool_df)} candidates → top_candidates_{pool_name}.csv")
+        print(f"[sample_cfg] {pool_name}: retrieved={n_retrieved}  unique={n_unique}  "
+              f"final={len(pool_df)} → top_candidates_{pool_name}.csv")
 
     # Combined (all pools, deduplicated)
     candidates_df = (
