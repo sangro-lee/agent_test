@@ -327,17 +327,32 @@ def main():
         if _train_latent_path.exists():
             _z_train_tsne = np.load(_train_latent_path)
             _n_train = len(_z_train_tsne)
-            _combined = np.vstack([_z_train_tsne, z_samples])
+
+            _test_latent_path = Path(run_dir) / "latents_test.npy"
+            _z_test_tsne = np.load(_test_latent_path) if _test_latent_path.exists() else None
+            _n_test = len(_z_test_tsne) if _z_test_tsne is not None else 0
+
+            _parts = [_z_train_tsne]
+            if _z_test_tsne is not None:
+                _parts.append(_z_test_tsne)
+            _parts.append(z_samples)
+            _combined = np.vstack(_parts)
+
             _perp = min(30, max(5, len(_combined) // 10))
             _emb = TSNE(n_components=2, perplexity=_perp, random_state=42,
                         max_iter=1000).fit_transform(_combined)
+
             _emb_train = _emb[:_n_train]
-            _emb_all   = _emb[_n_train:]
+            _emb_test  = _emb[_n_train:_n_train + _n_test] if _n_test > 0 else None
+            _emb_all   = _emb[_n_train + _n_test:]
             _emb_topk  = _emb_all[top_indices]
 
             _fig, _ax = _plt.subplots(figsize=(7, 6))
             _ax.scatter(_emb_train[:, 0], _emb_train[:, 1],
-                        s=8, alpha=0.25, c="gray", label=f"train ({_n_train})")
+                        s=8, alpha=0.2, c="gray", label=f"train ({_n_train})")
+            if _emb_test is not None:
+                _ax.scatter(_emb_test[:, 0], _emb_test[:, 1],
+                            s=12, alpha=0.6, c="orange", label=f"test ({_n_test})")
             _ax.scatter(_emb_all[:, 0], _emb_all[:, 1],
                         s=8, alpha=0.35, c="steelblue", label=f"sampled ({len(z_samples)})")
             _ax.scatter(_emb_topk[:, 0], _emb_topk[:, 1],
