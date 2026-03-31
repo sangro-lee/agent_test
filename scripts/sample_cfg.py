@@ -317,7 +317,8 @@ def main():
     with open(out_dir / "diversity.json", "w") as _f:
         json.dump(_diversity_data, _f)
 
-    # t-SNE: train vs sampled vs top-k selected
+    # t-SNE: pre-compute embedding (plot after retrieval to highlight retrieved test molecules)
+    _tsne_emb_data = None
     try:
         from sklearn.manifold import TSNE
         import matplotlib
@@ -342,32 +343,19 @@ def main():
             _emb = TSNE(n_components=2, perplexity=_perp, random_state=42,
                         max_iter=1000).fit_transform(_combined)
 
-            _emb_train = _emb[:_n_train]
-            _emb_test  = _emb[_n_train:_n_train + _n_test] if _n_test > 0 else None
-            _emb_all   = _emb[_n_train + _n_test:]
-            _emb_topk  = _emb_all[top_indices]
-
-            _fig, _ax = _plt.subplots(figsize=(7, 6))
-            _ax.scatter(_emb_train[:, 0], _emb_train[:, 1],
-                        s=8, alpha=0.2, c="gray", label=f"train ({_n_train})")
-            if _emb_test is not None:
-                _ax.scatter(_emb_test[:, 0], _emb_test[:, 1],
-                            s=12, alpha=0.6, c="orange", label=f"test ({_n_test})")
-            _ax.scatter(_emb_all[:, 0], _emb_all[:, 1],
-                        s=8, alpha=0.35, c="steelblue", label=f"sampled ({len(z_samples)})")
-            _ax.scatter(_emb_topk[:, 0], _emb_topk[:, 1],
-                        s=25, alpha=0.9, c="tomato", label=f"top-{len(top_indices)} selected")
-            _ax.set_title(f"t-SNE latent space — {w_tag}")
-            _ax.legend(fontsize=8)
-            _ax.grid(True, alpha=0.3)
-            _fig.tight_layout()
-            _fig.savefig(out_dir / "tsne.png", dpi=150, bbox_inches="tight")
-            _plt.close(_fig)
-            print(f"[sample_cfg] t-SNE → {out_dir / 'tsne.png'}")
+            _tsne_emb_data = {
+                "emb_train": _emb[:_n_train],
+                "emb_test":  _emb[_n_train:_n_train + _n_test] if _n_test > 0 else None,
+                "emb_all":   _emb[_n_train + _n_test:],
+                "emb_topk":  _emb[_n_train + _n_test:][top_indices],
+                "n_train": _n_train, "n_test": _n_test,
+                "smiles_pool_test": list(retrieval_pools["test"][1]) if "test" in retrieval_pools else [],
+            }
     except Exception as _e:
         print(f"[sample_cfg] t-SNE skipped: {_e}")
 
     all_rows = []
+    _pool_dfs = {}
     for pool_name, (z_pool, smiles_pool, y_lookup) in retrieval_pools.items():
         rows = []
         for idx in top_indices:
@@ -393,6 +381,7 @@ def main():
         )
         pool_df.to_csv(out_dir / f"top_candidates_{pool_name}.csv", index=False)
         all_rows.append(pool_df)
+        _pool_dfs[pool_name] = pool_df
         print(f"[sample_cfg] {pool_name}: retrieved={n_retrieved}  unique={n_unique}  "
               f"final={len(pool_df)} → top_candidates_{pool_name}.csv")
 
@@ -405,6 +394,41 @@ def main():
         .reset_index(drop=True)
     )
     candidates_df.to_csv(out_dir / "top_candidates.csv", index=False)
+
+    # t-SNE plot (after retrieval: highlight retrieved test molecules)
+    if _tsne_emb_data is not None:
+        try:
+            _retrieved_test_smiles = set(_pool_dfs.get("test", pd.DataFrame()).get("smiles", []))
+            _smiles_pool_test = _tsne_emb_data["smiles_pool_test"]
+            _retrieved_test_idx = [i for i, s in enumerate(_smiles_pool_test)
+                                   if s in _retrieved_test_smiles]
+
+            _fig, _ax = _plt.subplots(figsize=(7, 6))
+            _ax.scatter(_tsne_emb_data["emb_train"][:, 0], _tsne_emb_data["emb_train"][:, 1],
+                        s=8, alpha=0.2, c="gray", label=f"train ({_tsne_emb_data['n_train']})")
+            if _tsne_emb_data["emb_test"] is not None:
+                _ax.scatter(_tsne_emb_data["emb_test"][:, 0], _tsne_emb_data["emb_test"][:, 1],
+                            s=12, alpha=0.5, c="orange",
+                            label=f"test ({_tsne_emb_data['n_test']})")
+                if _retrieved_test_idx:
+                    _emb_retrieved = _tsne_emb_data["emb_test"][_retrieved_test_idx]
+                    _ax.scatter(_emb_retrieved[:, 0], _emb_retrieved[:, 1],
+                                s=60, alpha=1.0, c="gold", marker="*",
+                                label=f"retrieved test ({len(_retrieved_test_idx)})",
+                                zorder=5)
+            _ax.scatter(_tsne_emb_data["emb_all"][:, 0], _tsne_emb_data["emb_all"][:, 1],
+                        s=8, alpha=0.3, c="steelblue", label=f"sampled ({len(z_samples)})")
+            _ax.scatter(_tsne_emb_data["emb_topk"][:, 0], _tsne_emb_data["emb_topk"][:, 1],
+                        s=25, alpha=0.9, c="tomato", label=f"top-{len(top_indices)} selected")
+            _ax.set_title(f"t-SNE latent space — {w_tag}")
+            _ax.legend(fontsize=8)
+            _ax.grid(True, alpha=0.3)
+            _fig.tight_layout()
+            _fig.savefig(out_dir / "tsne.png", dpi=150, bbox_inches="tight")
+            _plt.close(_fig)
+            print(f"[sample_cfg] t-SNE → {out_dir / 'tsne.png'}")
+        except Exception as _e:
+            print(f"[sample_cfg] t-SNE plot failed: {_e}")
 
     best_pred = float(pred_batch.max()) if len(pred_batch) else float("nan")
     print(f"\n[sample_cfg] best_pred_pIC50={best_pred:.4f}")
