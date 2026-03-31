@@ -9,17 +9,19 @@
 #SBATCH -e ./logs/%x.e%j
 
 # Usage:
-#   sbatch scripts/submit_sample_cfg.sh sme_random 3.0 8.0
-#   bash   scripts/submit_sample_cfg.sh sme_random 3.0 8.0   (로컬 테스트)
+#   sbatch scripts/submit_sample_cfg.sh sme_random 3.0 8.0 2026-03-31
+#   bash   scripts/submit_sample_cfg.sh sme_random 3.0 8.0   (로컬 테스트, date 생략 가능)
 #
 # Args:
 #   $1  EXP             실험명 (default: sme_random)
 #   $2  GUIDANCE_SCALE  CFG weight w (default: 3.0)
 #   $3  TARGET_PIC50    목표 pIC50 (default: train 90th percentile)
+#   $4  DATE            diffusion/ 하위 날짜 폴더 (default: 생략 → legacy path)
 
 EXP="${1:-sme_random}"
 GUIDANCE_SCALE="${2:-3.0}"
 TARGET_PIC50="${3:-}"
+DATE="${4:-}"
 
 _D="${SLURM_SUBMIT_DIR:-.}"
 if   [ -d "$_D/src" ];      then ROOT="$(cd "$_D"    && pwd)"
@@ -44,10 +46,13 @@ sed "s|run_root: \"auto\"|run_root: \"$RUN_DIR\"|" \
 
 echo "[sample_cfg] EXP=$EXP  guidance_scale=$GUIDANCE_SCALE  target_pIC50=${TARGET_PIC50:-auto}"
 
-# target_pic50 인수는 지정된 경우에만 추가
+# 선택 인수는 지정된 경우에만 추가
 EXTRA_ARGS=""
 if [ -n "$TARGET_PIC50" ]; then
-  EXTRA_ARGS="--target_pic50 $TARGET_PIC50"
+  EXTRA_ARGS="$EXTRA_ARGS --target_pic50 $TARGET_PIC50"
+fi
+if [ -n "$DATE" ]; then
+  EXTRA_ARGS="$EXTRA_ARGS --date $DATE"
 fi
 
 $PYTHON "$ROOT/scripts/sample_cfg.py" \
