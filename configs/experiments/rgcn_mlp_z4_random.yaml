@@ -17,7 +17,7 @@ model:
   type: "sme_rgcn"
   latent_dim: 4
   sme_hidden_feats: [256, 256]
-  sme_ffn_dims: [64, 16]        # funnel: 256 → 64 → 16 → 4
+  sme_ffn_dims: [128, 64]       # funnel: 256 → 128 → 64 → 4
   sme_rgcn_dropout: 0.25
   sme_ffn_dropout: 0.25
 
