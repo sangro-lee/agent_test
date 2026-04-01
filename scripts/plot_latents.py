@@ -5,9 +5,13 @@ Usage:
   # 단독 실행 (각 split 독립 UMAP)
   python scripts/plot_latents.py --run_dir outputs/runs/rgcn_mlp_z4
 
-  # 기준 run_dir로 UMAP fit → 다른 실험에 같은 좌표계 적용
+  # reducer 저장 (최초 1회)
+  python scripts/plot_latents.py --run_dir outputs/runs/rgcn_mlp_z4 \\
+      --save_reducer outputs/umap_reducer.pkl
+
+  # 저장된 reducer로 다른 실험 변환 (re-fit 없음)
   python scripts/plot_latents.py --run_dir outputs/runs/rgcn_vqc_z4 \\
-      --ref_run_dir outputs/runs/rgcn_mlp_z4
+      --load_reducer outputs/umap_reducer.pkl
 
   python scripts/plot_latents.py --run_dir outputs/runs/rgcn_mlp_z4 --no_tsne
 """
@@ -30,11 +34,13 @@ def main():
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--config",  type=str, help="Config YAML path (to resolve run_dir)")
     group.add_argument("--run_dir", type=str, help="Run directory containing latents_*.npy")
-    parser.add_argument("--ref_run_dir", type=str, default=None,
-                        help="Reference run_dir to fit UMAP on (latents_train.npy). "
-                             "If omitted, fits on each split independently.")
-    parser.add_argument("--splits", nargs="+", default=["train", "val", "test"],
-                        help="Splits to plot (default: train val test)")
+    parser.add_argument("--ref_run_dir",  type=str, default=None,
+                        help="Reference run_dir: fit UMAP on its latents_train.npy")
+    parser.add_argument("--save_reducer", type=str, default=None,
+                        help="Path to save fitted UMAP reducer (.pkl)")
+    parser.add_argument("--load_reducer", type=str, default=None,
+                        help="Path to load pre-fitted UMAP reducer (.pkl) — skips fitting")
+    parser.add_argument("--splits", nargs="+", default=["train", "val", "test"])
     parser.add_argument("--no_tsne",          action="store_true")
     parser.add_argument("--no_umap",          action="store_true")
     parser.add_argument("--umap_n_neighbors", type=int, default=15)
@@ -51,17 +57,28 @@ def main():
     eval_dir = run_dir / "evaluation"
     eval_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── UMAP reducer: fit on ref_run_dir train latents if given ────────────
+    # ── UMAP reducer ────────────────────────────────────────────────────────
     umap_reducer = None
-    if not args.no_umap and args.ref_run_dir:
-        ref_train = Path(args.ref_run_dir) / "latents_train.npy"
-        if not ref_train.exists():
-            print(f"[plot_latents] ref latents_train.npy not found: {ref_train}")
+    if not args.no_umap:
+        if args.load_reducer:
+            import joblib
+            umap_reducer = joblib.load(args.load_reducer)
+            print(f"[plot_latents] Loaded UMAP reducer: {args.load_reducer}")
         else:
-            ref_z = np.load(ref_train).astype(np.float32)
-            print(f"[plot_latents] Fitting UMAP on ref ({ref_train.parent.name}, n={len(ref_z)})...")
-            umap_reducer = make_umap_reducer(ref_z, n_neighbors=args.umap_n_neighbors)
+            # fit on ref_run_dir/latents_train.npy or current run_dir/latents_train.npy
+            ref_dir = Path(args.ref_run_dir) if args.ref_run_dir else run_dir
+            ref_train = ref_dir / "latents_train.npy"
+            if ref_train.exists():
+                ref_z = np.load(ref_train).astype(np.float32)
+                print(f"[plot_latents] Fitting UMAP on {ref_dir.name} (n={len(ref_z)})...")
+                umap_reducer = make_umap_reducer(ref_z, n_neighbors=args.umap_n_neighbors)
+                if args.save_reducer and umap_reducer is not None:
+                    import joblib
+                    Path(args.save_reducer).parent.mkdir(parents=True, exist_ok=True)
+                    joblib.dump(umap_reducer, args.save_reducer)
+                    print(f"[plot_latents] Saved UMAP reducer: {args.save_reducer}")
 
+    # ── Plot ────────────────────────────────────────────────────────────────
     all_latents, all_y = [], []
     for split in args.splits:
         z_path = run_dir / f"latents_{split}.npy"
