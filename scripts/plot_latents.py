@@ -2,10 +2,14 @@
 """Plot t-SNE and UMAP from saved latents (no model re-run needed).
 
 Usage:
-  python scripts/plot_latents.py --config configs/experiments/rgcn_mlp_z4.yaml
+  # 단독 실행 (각 split 독립 UMAP)
   python scripts/plot_latents.py --run_dir outputs/runs/rgcn_mlp_z4
+
+  # 기준 run_dir로 UMAP fit → 다른 실험에 같은 좌표계 적용
+  python scripts/plot_latents.py --run_dir outputs/runs/rgcn_vqc_z4 \\
+      --ref_run_dir outputs/runs/rgcn_mlp_z4
+
   python scripts/plot_latents.py --run_dir outputs/runs/rgcn_mlp_z4 --no_tsne
-  python scripts/plot_latents.py --run_dir outputs/runs/rgcn_mlp_z4 --no_umap
 """
 from __future__ import annotations
 
@@ -18,7 +22,7 @@ import numpy as np
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.evaluation.plots import plot_latent_tsne, plot_latent_umap
+from src.evaluation.plots import make_umap_reducer, plot_latent_tsne, plot_latent_umap
 
 
 def main():
@@ -26,10 +30,13 @@ def main():
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--config",  type=str, help="Config YAML path (to resolve run_dir)")
     group.add_argument("--run_dir", type=str, help="Run directory containing latents_*.npy")
+    parser.add_argument("--ref_run_dir", type=str, default=None,
+                        help="Reference run_dir to fit UMAP on (latents_train.npy). "
+                             "If omitted, fits on each split independently.")
     parser.add_argument("--splits", nargs="+", default=["train", "val", "test"],
                         help="Splits to plot (default: train val test)")
-    parser.add_argument("--no_tsne",        action="store_true")
-    parser.add_argument("--no_umap",        action="store_true")
+    parser.add_argument("--no_tsne",          action="store_true")
+    parser.add_argument("--no_umap",          action="store_true")
     parser.add_argument("--umap_n_neighbors", type=int, default=15)
     args = parser.parse_args()
 
@@ -43,6 +50,17 @@ def main():
 
     eval_dir = run_dir / "evaluation"
     eval_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── UMAP reducer: fit on ref_run_dir train latents if given ────────────
+    umap_reducer = None
+    if not args.no_umap and args.ref_run_dir:
+        ref_train = Path(args.ref_run_dir) / "latents_train.npy"
+        if not ref_train.exists():
+            print(f"[plot_latents] ref latents_train.npy not found: {ref_train}")
+        else:
+            ref_z = np.load(ref_train).astype(np.float32)
+            print(f"[plot_latents] Fitting UMAP on ref ({ref_train.parent.name}, n={len(ref_z)})...")
+            umap_reducer = make_umap_reducer(ref_z, n_neighbors=args.umap_n_neighbors)
 
     all_latents, all_y = [], []
     for split in args.splits:
@@ -60,7 +78,8 @@ def main():
             print(f"  Saved: tsne_{split}.png")
         if not args.no_umap:
             plot_latent_umap(latents, y, eval_dir / f"umap_{split}.png",
-                             split_name=split, n_neighbors=args.umap_n_neighbors)
+                             split_name=split, n_neighbors=args.umap_n_neighbors,
+                             reducer=umap_reducer)
             print(f"  Saved: umap_{split}.png")
 
         all_latents.append(latents)
@@ -75,7 +94,8 @@ def main():
             print("  Saved: tsne_all.png")
         if not args.no_umap:
             plot_latent_umap(combined, combined_y, eval_dir / "umap_all.png",
-                             split_name="all splits", n_neighbors=args.umap_n_neighbors)
+                             split_name="all splits", n_neighbors=args.umap_n_neighbors,
+                             reducer=umap_reducer)
             print("  Saved: umap_all.png")
 
 

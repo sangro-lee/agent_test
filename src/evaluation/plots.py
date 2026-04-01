@@ -54,9 +54,24 @@ def plot_loss_curve(history, save_path):
     plt.close(fig)
 
 
-def plot_latent_umap(latents, labels, save_path, split_name="", n_neighbors: int = 15):
+def make_umap_reducer(latents: np.ndarray, n_neighbors: int = 15):
+    """Fit and return a UMAP reducer on the given latents (for reuse across plots)."""
     try:
         import umap as umap_lib
+    except ImportError:
+        return None
+    latents = np.asarray(latents, dtype=float)
+    n_neighbors = min(n_neighbors, latents.shape[0] - 1)
+    reducer = umap_lib.UMAP(n_components=2, n_neighbors=n_neighbors, min_dist=0.1,
+                            init="random", random_state=42)
+    reducer.fit(latents)
+    return reducer
+
+
+def plot_latent_umap(latents, labels, save_path, split_name="", n_neighbors: int = 15,
+                     reducer=None):
+    try:
+        import umap as umap_lib  # noqa: F401
     except ImportError:
         return  # silently skip if umap-learn not installed
 
@@ -66,10 +81,13 @@ def plot_latent_umap(latents, labels, save_path, split_name="", n_neighbors: int
     if latents.ndim != 2 or latents.shape[0] == 0:
         raise ValueError("latents must be a non-empty 2D array")
 
-    n_neighbors = min(n_neighbors, latents.shape[0] - 1)
-    reducer = umap_lib.UMAP(n_components=2, n_neighbors=n_neighbors, min_dist=0.1,
-                            init="random", random_state=42)
-    emb = reducer.fit_transform(latents)
+    if reducer is None:
+        reducer = make_umap_reducer(latents, n_neighbors=n_neighbors)
+        if reducer is None:
+            return
+        emb = reducer.transform(latents)
+    else:
+        emb = reducer.transform(latents)
 
     title = f"Latent UMAP{' — ' + split_name if split_name else ''}"
     fig, ax = plt.subplots(figsize=(7, 6))
