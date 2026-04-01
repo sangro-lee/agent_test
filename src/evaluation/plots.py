@@ -54,7 +54,7 @@ def plot_loss_curve(history, save_path):
     plt.close(fig)
 
 
-def plot_latent_umap(latents, labels, save_path, split_name=""):
+def plot_latent_umap(latents, labels, save_path, split_name="", n_neighbors: int = 15):
     try:
         import umap as umap_lib
     except ImportError:
@@ -66,7 +66,7 @@ def plot_latent_umap(latents, labels, save_path, split_name=""):
     if latents.ndim != 2 or latents.shape[0] == 0:
         raise ValueError("latents must be a non-empty 2D array")
 
-    n_neighbors = min(15, latents.shape[0] - 1)
+    n_neighbors = min(n_neighbors, latents.shape[0] - 1)
     reducer = umap_lib.UMAP(n_components=2, n_neighbors=n_neighbors, min_dist=0.1, random_state=42)
     emb = reducer.fit_transform(latents)
 
