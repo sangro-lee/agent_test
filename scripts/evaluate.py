@@ -8,7 +8,7 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.evaluation.metrics import compute_metrics
-from src.evaluation.plots import plot_latent_tsne, plot_loss_curve, plot_scatter
+from src.evaluation.plots import plot_latent_tsne, plot_latent_umap, plot_loss_curve, plot_scatter
 from src.features.descriptors import smiles_to_descriptors
 from src.features.fingerprints import smiles_to_fp
 from src.features.graph import MolDataset, SMEMolDataset, SME_NODE_DIM
@@ -215,6 +215,7 @@ def main():
             eval_dir / f"scatter_{split_name}.png",
         )
         plot_latent_tsne(latents, y_true, eval_dir / f"tsne_{split_name}.png", split_name=split_name)
+        plot_latent_umap(latents, y_true, eval_dir / f"umap_{split_name}.png", split_name=split_name)
 
         # Save latents, SMILES, and y for downstream use (diffusion sampling / screening)
         np.save(run_dir / f"latents_{split_name}.npy", latents)
@@ -232,6 +233,7 @@ def main():
     combined_latents = np.concatenate(all_latents, axis=0)
     combined_y = np.concatenate(all_y_true, axis=0)
     plot_latent_tsne(combined_latents, combined_y, eval_dir / "tsne_all.png", split_name="all splits")
+    plot_latent_umap(combined_latents, combined_y, eval_dir / "umap_all.png", split_name="all splits")
 
     history_path = Path(run_dir) / "history.json"
     if history_path.exists():

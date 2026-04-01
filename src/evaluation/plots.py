@@ -54,6 +54,38 @@ def plot_loss_curve(history, save_path):
     plt.close(fig)
 
 
+def plot_latent_umap(latents, labels, save_path, split_name=""):
+    try:
+        import umap as umap_lib
+    except ImportError:
+        return  # silently skip if umap-learn not installed
+
+    latents = np.asarray(latents, dtype=float)
+    labels = np.asarray(labels, dtype=float)
+
+    if latents.ndim != 2 or latents.shape[0] == 0:
+        raise ValueError("latents must be a non-empty 2D array")
+
+    n_neighbors = min(15, latents.shape[0] - 1)
+    reducer = umap_lib.UMAP(n_components=2, n_neighbors=n_neighbors, min_dist=0.1, random_state=42)
+    emb = reducer.fit_transform(latents)
+
+    title = f"Latent UMAP{' — ' + split_name if split_name else ''}"
+    fig, ax = plt.subplots(figsize=(7, 6))
+    sc = ax.scatter(emb[:, 0], emb[:, 1], c=labels, cmap="viridis", s=12, alpha=0.8)
+    cbar = fig.colorbar(sc, ax=ax)
+    cbar.set_label("pIC50")
+    ax.set_xlabel("UMAP 1")
+    ax.set_ylabel("UMAP 2")
+    ax.set_title(title)
+
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=220)
+    plt.close(fig)
+
+
 def plot_latent_tsne(latents, labels, save_path, split_name=""):
     from sklearn.manifold import TSNE
 
