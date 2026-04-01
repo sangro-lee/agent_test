@@ -67,7 +67,8 @@ def plot_latent_umap(latents, labels, save_path, split_name="", n_neighbors: int
         raise ValueError("latents must be a non-empty 2D array")
 
     n_neighbors = min(n_neighbors, latents.shape[0] - 1)
-    reducer = umap_lib.UMAP(n_components=2, n_neighbors=n_neighbors, min_dist=0.1, random_state=42)
+    reducer = umap_lib.UMAP(n_components=2, n_neighbors=n_neighbors, min_dist=0.1,
+                            init="random", random_state=42)
     emb = reducer.fit_transform(latents)
 
     title = f"Latent UMAP{' — ' + split_name if split_name else ''}"

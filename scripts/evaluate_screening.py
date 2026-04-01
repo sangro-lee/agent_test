@@ -92,7 +92,7 @@ def plot_umap(rows: list[dict], out_dir: Path, n_neighbors: int = 15) -> None:
             continue
 
         print(f"[UMAP] Fitting on {exp} (train={len(z_train)})...")
-        reducer = umap_lib.UMAP(n_components=2, random_state=42,
+        reducer = umap_lib.UMAP(n_components=2, random_state=42, init="random",
                                 n_neighbors=min(n_neighbors, len(z_train) - 1), min_dist=0.1)
         reducer.fit(z_train)
 
