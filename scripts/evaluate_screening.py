@@ -20,6 +20,7 @@ import argparse
 import json
 import math
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -47,6 +48,78 @@ def _run_tag(csv_path: Path) -> str:
         w_tag = csv_path.parent.name   # e.g. cfg_w3.0_ddim
         return f"{exp}\n{w_tag}"
     return csv_path.parent.name
+
+
+def _run_root(csv_path: Path) -> Path:
+    """Return experiment root dir (parent of 'diffusion' folder)."""
+    parts = csv_path.parts
+    diff_idx = next((i for i, p in enumerate(parts) if p == "diffusion"), None)
+    if diff_idx is not None:
+        return Path(*parts[:diff_idx])
+    return csv_path.parent.parent.parent
+
+
+def plot_umap(rows: list[dict], out_dir: Path) -> None:
+    """Plot UMAP for each experiment group: train+test as background, each run's sampled latents colored."""
+    try:
+        import umap as umap_lib
+    except ImportError:
+        print("[UMAP] umap-learn not installed. Run: pip install umap-learn")
+        return
+
+    exp_groups: dict[str, list[dict]] = defaultdict(list)
+    for row in rows:
+        exp_groups[row["exp"]].append(row)
+
+    for exp, runs in exp_groups.items():
+        root = _run_root(Path(runs[0]["path"]))
+        z_train_path = root / "latents_train.npy"
+        z_test_path  = root / "latents_test.npy"
+        if not z_train_path.exists():
+            print(f"[UMAP] latents_train.npy not found for {exp}, skipping.")
+            continue
+
+        z_train = np.load(z_train_path).astype(np.float32)
+        z_test  = np.load(z_test_path).astype(np.float32) if z_test_path.exists() else None
+
+        run_samples = []
+        for row in runs:
+            z_path = Path(row["path"]).parent / "z_samples.npy"
+            if z_path.exists():
+                run_samples.append((row["run_tag"], np.load(z_path).astype(np.float32)))
+        if not run_samples:
+            print(f"[UMAP] No z_samples.npy found for {exp}, skipping.")
+            continue
+
+        print(f"[UMAP] Fitting on {exp} (train={len(z_train)})...")
+        reducer = umap_lib.UMAP(n_components=2, random_state=42, n_neighbors=15, min_dist=0.1)
+        reducer.fit(z_train)
+
+        emb_train = reducer.transform(z_train)
+        emb_test  = reducer.transform(z_test) if z_test is not None else None
+
+        fig, ax = plt.subplots(figsize=(8, 7))
+        ax.scatter(emb_train[:, 0], emb_train[:, 1], s=2, c="lightgray", alpha=0.5,
+                   label=f"train ({len(z_train)})", zorder=1)
+        if emb_test is not None:
+            ax.scatter(emb_test[:, 0], emb_test[:, 1], s=4, c="orange", alpha=0.6,
+                       label=f"test ({len(z_test)})", zorder=2)
+
+        colors = plt.cm.tab10(np.linspace(0, 0.9, len(run_samples)))
+        for (tag, z_s), color in zip(run_samples, colors):
+            emb_s = reducer.transform(z_s)
+            ax.scatter(emb_s[:, 0], emb_s[:, 1], s=6, color=color, alpha=0.7,
+                       label=tag.replace("\n", "/"), zorder=3)
+
+        ax.set_title(f"UMAP — {exp}")
+        ax.legend(fontsize=7, markerscale=2)
+        ax.grid(True, alpha=0.2)
+        fig.tight_layout()
+
+        umap_out = out_dir / f"umap_{exp}.png"
+        fig.savefig(umap_out, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"Saved: {umap_out}")
 
 
 def compute_metrics(df: pd.DataFrame, threshold: float) -> dict:
@@ -80,6 +153,8 @@ def main():
     parser.add_argument("--csv",       default="top_candidates_test.csv",
                         help="CSV filename to look for (default: top_candidates_test.csv)")
     parser.add_argument("--out",       default=str(ROOT / "outputs" / "screening_comparison.png"))
+    parser.add_argument("--umap",      action="store_true",
+                        help="Generate UMAP plots per experiment (requires umap-learn)")
     args = parser.parse_args()
 
     pattern = f"*/diffusion/**/{args.csv}"
@@ -170,6 +245,10 @@ def main():
     result_csv["run_tag"] = result_csv["run_tag"].str.replace('\n', '/', regex=False)
     result_csv.drop(columns=["path"]).to_csv(csv_out, index=False)
     print(f"Saved: {csv_out}")
+
+    # ── UMAP ───────────────────────────────────────────────────────────────
+    if args.umap:
+        plot_umap(rows, Path(args.out).parent)
 
 
 if __name__ == "__main__":
