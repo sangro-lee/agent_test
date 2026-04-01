@@ -43,7 +43,8 @@ def main():
     parser.add_argument("--splits", nargs="+", default=["train", "val", "test"])
     parser.add_argument("--no_tsne",          action="store_true")
     parser.add_argument("--no_umap",          action="store_true")
-    parser.add_argument("--umap_n_neighbors", type=int, default=15)
+    parser.add_argument("--umap_n_neighbors", type=int,   default=15)
+    parser.add_argument("--umap_min_dist",    type=float, default=0.1)
     args = parser.parse_args()
 
     if args.config:
@@ -71,7 +72,8 @@ def main():
             if ref_train.exists():
                 ref_z = np.load(ref_train).astype(np.float32)
                 print(f"[plot_latents] Fitting UMAP on {ref_dir.name} (n={len(ref_z)})...")
-                umap_reducer = make_umap_reducer(ref_z, n_neighbors=args.umap_n_neighbors)
+                umap_reducer = make_umap_reducer(ref_z, n_neighbors=args.umap_n_neighbors,
+                                                 min_dist=args.umap_min_dist)
                 if args.save_reducer and umap_reducer is not None:
                     import joblib
                     Path(args.save_reducer).parent.mkdir(parents=True, exist_ok=True)
@@ -96,7 +98,7 @@ def main():
         if not args.no_umap:
             plot_latent_umap(latents, y, eval_dir / f"umap_{split}.png",
                              split_name=split, n_neighbors=args.umap_n_neighbors,
-                             reducer=umap_reducer)
+                             min_dist=args.umap_min_dist, reducer=umap_reducer)
             print(f"  Saved: umap_{split}.png")
 
         all_latents.append(latents)
@@ -112,7 +114,7 @@ def main():
         if not args.no_umap:
             plot_latent_umap(combined, combined_y, eval_dir / "umap_all.png",
                              split_name="all splits", n_neighbors=args.umap_n_neighbors,
-                             reducer=umap_reducer)
+                             min_dist=args.umap_min_dist, reducer=umap_reducer)
             print("  Saved: umap_all.png")
 
 

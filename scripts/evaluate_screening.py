@@ -59,7 +59,7 @@ def _run_root(csv_path: Path) -> Path:
     return csv_path.parent.parent.parent
 
 
-def plot_umap(rows: list[dict], out_dir: Path, n_neighbors: int = 15) -> None:
+def plot_umap(rows: list[dict], out_dir: Path, n_neighbors: int = 15, min_dist: float = 0.1) -> None:
     """Plot UMAP for each experiment group: train+test as background, each run's sampled latents colored."""
     try:
         import umap as umap_lib
@@ -93,7 +93,7 @@ def plot_umap(rows: list[dict], out_dir: Path, n_neighbors: int = 15) -> None:
 
         print(f"[UMAP] Fitting on {exp} (train={len(z_train)})...")
         reducer = umap_lib.UMAP(n_components=2, random_state=42, init="random",
-                                n_neighbors=min(n_neighbors, len(z_train) - 1), min_dist=0.1)
+                                n_neighbors=min(n_neighbors, len(z_train) - 1), min_dist=min_dist)
         reducer.fit(z_train)
 
         emb_train = reducer.transform(z_train)
@@ -156,8 +156,10 @@ def main():
     parser.add_argument("--out",       default=str(ROOT / "outputs" / "screening_comparison.png"))
     parser.add_argument("--umap",      action="store_true",
                         help="Generate UMAP plots per experiment (requires umap-learn)")
-    parser.add_argument("--umap_n_neighbors", type=int, default=15,
+    parser.add_argument("--umap_n_neighbors", type=int,   default=15,
                         help="UMAP n_neighbors (default: 15)")
+    parser.add_argument("--umap_min_dist",    type=float, default=0.1,
+                        help="UMAP min_dist (default: 0.1)")
     args = parser.parse_args()
 
     pattern = f"*/diffusion/**/{args.csv}"
@@ -251,7 +253,8 @@ def main():
 
     # ── UMAP ───────────────────────────────────────────────────────────────
     if args.umap:
-        plot_umap(rows, Path(args.out).parent, n_neighbors=args.umap_n_neighbors)
+        plot_umap(rows, Path(args.out).parent, n_neighbors=args.umap_n_neighbors,
+                  min_dist=args.umap_min_dist)
 
 
 if __name__ == "__main__":
