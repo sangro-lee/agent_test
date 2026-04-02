@@ -123,7 +123,7 @@ def plot_umap_sampled(
 
     # sampled latents
     ax.scatter(emb_samples[:, 0], emb_samples[:, 1],
-               s=18, alpha=0.8, c="tomato", label=f"sampled ({len(z_samples)})", zorder=3)
+               s=18, alpha=0.8, c="red", label=f"sampled ({len(z_samples)})", zorder=3)
 
     cbar = fig.colorbar(sc, ax=ax, location="left", pad=0.12)
     cbar.set_label("pIC50 train")
