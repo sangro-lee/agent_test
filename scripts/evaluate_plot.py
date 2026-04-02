@@ -65,6 +65,9 @@ def plot_umap_sampled(
     z_test  = np.load(z_test_path).astype(np.float32)  if z_test_path.exists()  else None
     y_train = np.load(y_train_path).astype(np.float32) if y_train_path.exists() else np.zeros(len(z_train))
 
+    y_test_path = run_dir / "y_test.npy"
+    y_test = np.load(y_test_path).astype(np.float32) if (z_test is not None and y_test_path.exists()) else None
+
     # ── Load sampled latents ──────────────────────────────────────────────
     z_samples = np.load(z_samples_path).astype(np.float32)
     print(f"[evaluate_plot] z_samples: {z_samples.shape}  from {z_samples_path.parent.name}")
@@ -95,29 +98,48 @@ def plot_umap_sampled(
     # ── Plot ─────────────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(8, 6))
 
-    # background: train colored by pIC50
-    sc = ax.scatter(emb_train[:, 0], emb_train[:, 1],
-                    c=y_train, cmap="Blues", s=6, alpha=0.4,
-                    vmin=y_train.min(), vmax=y_train.max(),
-                    label=f"train ({len(z_train)})", zorder=1)
+    # shared pIC50 range across train + test
+    all_y = [y_train]
+    if y_test is not None:
+        all_y.append(y_test)
+    vmin = min(a.min() for a in all_y)
+    vmax = max(a.max() for a in all_y)
 
-    # test (orange)
+    # background: train colored by pIC50 (Blues)
+    sc_train = ax.scatter(emb_train[:, 0], emb_train[:, 1],
+                          c=y_train, cmap="Blues", s=6, alpha=0.4,
+                          vmin=vmin, vmax=vmax,
+                          label=f"train ({len(z_train)})", zorder=1)
+
+    # test colored by pIC50 (Oranges)
     if emb_test is not None:
-        ax.scatter(emb_test[:, 0], emb_test[:, 1],
-                   s=10, alpha=0.5, c="orange", label=f"test ({len(z_test)})", zorder=2)
+        if y_test is not None:
+            ax.scatter(emb_test[:, 0], emb_test[:, 1],
+                       c=y_test, cmap="Oranges", s=14, alpha=0.7,
+                       vmin=vmin, vmax=vmax,
+                       label=f"test ({len(z_test)})", zorder=2)
+        else:
+            ax.scatter(emb_test[:, 0], emb_test[:, 1],
+                       s=10, alpha=0.5, c="orange", label=f"test ({len(z_test)})", zorder=2)
+
         # retrieved test molecules (gold stars)
         if retrieved_test_idx:
             emb_retrieved = emb_test[retrieved_test_idx]
+            col_retrieved = y_test[retrieved_test_idx] if y_test is not None else "gold"
             ax.scatter(emb_retrieved[:, 0], emb_retrieved[:, 1],
-                       s=80, alpha=1.0, c="gold", marker="*",
+                       c=col_retrieved, cmap="Oranges" if y_test is not None else None,
+                       vmin=vmin, vmax=vmax,
+                       s=120, alpha=1.0, marker="*", edgecolors="black", linewidths=0.5,
                        label=f"retrieved test ({len(retrieved_test_idx)})", zorder=5)
+    else:
+        sc_test = None
 
     # sampled latents
     ax.scatter(emb_samples[:, 0], emb_samples[:, 1],
                s=18, alpha=0.8, c="tomato", label=f"sampled ({len(z_samples)})", zorder=3)
 
-    cbar = fig.colorbar(sc, ax=ax)
-    cbar.set_label("pIC50 (train)")
+    cbar = fig.colorbar(sc_train, ax=ax)
+    cbar.set_label("pIC50 (train=Blues / test=Oranges)")
     ax.set_xlabel("UMAP 1")
     ax.set_ylabel("UMAP 2")
     ax.set_title(f"UMAP — {run_dir.name}\n{z_samples_path.parent.name}")
