@@ -365,6 +365,8 @@ def main():
                 break
             pred_i = float(pred_batch[idx])
             for smi, sim in retrieve_nearest(z_samples[idx], z_pool, smiles_pool, top_k=5):
+                if len(seen_smiles) >= args.top_k:
+                    break
                 if smi not in seen_smiles:
                     seen_smiles.add(smi)
                     rows.append({
