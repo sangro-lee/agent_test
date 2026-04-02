@@ -64,7 +64,8 @@ def plot_umap_sampled(
     z_train = np.load(z_train_path).astype(np.float32)
     z_test  = np.load(z_test_path).astype(np.float32)  if z_test_path.exists()  else None
     y_train = np.load(y_train_path).astype(np.float32) if y_train_path.exists() else np.zeros(len(z_train))
-
+    y_test_path = run_dir / "y_test.npy"
+    y_test  = np.load(y_test_path).astype(np.float32)  if (z_test is not None and y_test_path.exists()) else None
 
     # ── Load sampled latents ──────────────────────────────────────────────
     z_samples = np.load(z_samples_path).astype(np.float32)
@@ -102,10 +103,16 @@ def plot_umap_sampled(
                     vmin=y_train.min(), vmax=y_train.max(),
                     label=f"train ({len(z_train)})", zorder=1)
 
-    # test (orange, fixed color)
+    # test colored by pIC50 (Oranges) if available, else fixed orange
     if emb_test is not None:
-        ax.scatter(emb_test[:, 0], emb_test[:, 1],
-                   s=10, alpha=0.5, c="orange", label=f"test ({len(z_test)})", zorder=2)
+        if y_test is not None:
+            ax.scatter(emb_test[:, 0], emb_test[:, 1],
+                       c=y_test, cmap="Oranges", s=10, alpha=0.6,
+                       vmin=y_train.min(), vmax=y_train.max(),
+                       label=f"test ({len(z_test)})", zorder=2)
+        else:
+            ax.scatter(emb_test[:, 0], emb_test[:, 1],
+                       s=10, alpha=0.5, c="orange", label=f"test ({len(z_test)})", zorder=2)
         # retrieved test molecules (gold stars)
         if retrieved_test_idx:
             emb_retrieved = emb_test[retrieved_test_idx]
@@ -118,7 +125,7 @@ def plot_umap_sampled(
                s=18, alpha=0.8, c="tomato", label=f"sampled ({len(z_samples)})", zorder=3)
 
     cbar = fig.colorbar(sc, ax=ax)
-    cbar.set_label("pIC50 (train)")
+    cbar.set_label("pIC50 (Blues=train / Oranges=test)")
     ax.set_xlabel("UMAP 1")
     ax.set_ylabel("UMAP 2")
     ax.set_title(f"UMAP — {run_dir.name}\n{z_samples_path.parent.name}")
