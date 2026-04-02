@@ -104,12 +104,13 @@ def plot_umap_sampled(
                     label=f"train ({len(z_train)})", zorder=1)
 
     # test colored by pIC50 (Oranges) if available, else fixed orange
+    sc_test = None
     if emb_test is not None:
         if y_test is not None:
-            ax.scatter(emb_test[:, 0], emb_test[:, 1],
-                       c=y_test, cmap="Oranges", s=10, alpha=0.6,
-                       vmin=y_train.min(), vmax=y_train.max(),
-                       label=f"test ({len(z_test)})", zorder=2)
+            sc_test = ax.scatter(emb_test[:, 0], emb_test[:, 1],
+                                 c=y_test, cmap="Oranges", s=10, alpha=0.6,
+                                 vmin=y_train.min(), vmax=y_train.max(),
+                                 label=f"test ({len(z_test)})", zorder=2)
         else:
             ax.scatter(emb_test[:, 0], emb_test[:, 1],
                        s=10, alpha=0.5, c="orange", label=f"test ({len(z_test)})", zorder=2)
@@ -124,8 +125,11 @@ def plot_umap_sampled(
     ax.scatter(emb_samples[:, 0], emb_samples[:, 1],
                s=18, alpha=0.8, c="tomato", label=f"sampled ({len(z_samples)})", zorder=3)
 
-    cbar = fig.colorbar(sc, ax=ax)
-    cbar.set_label("pIC50 (Blues=train / Oranges=test)")
+    cbar = fig.colorbar(sc, ax=ax, location="left", pad=0.12)
+    cbar.set_label("pIC50 train")
+    if emb_test is not None and sc_test is not None:
+        cbar2 = fig.colorbar(sc_test, ax=ax, location="right", pad=0.01)
+        cbar2.set_label("pIC50 test")
     ax.set_xlabel("UMAP 1")
     ax.set_ylabel("UMAP 2")
     ax.set_title(f"UMAP — {run_dir.name}\n{z_samples_path.parent.name}")
