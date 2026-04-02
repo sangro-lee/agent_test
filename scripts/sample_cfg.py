@@ -55,6 +55,10 @@ def _extra_args(parser):
                         help="Path to .npy file of external screening latents")
     parser.add_argument("--screening_smiles",  type=str, default=None,
                         help="Path to .npy file of external screening SMILES (object array)")
+    parser.add_argument("--retrieval_mode", type=str, default="diverse",
+                        choices=["diverse", "nearest1"],
+                        help="diverse: best-pred-first, up to 5 neighbors/latent until top_k unique. "
+                             "nearest1: 1 nearest per latent (all samples), dedup, sort by pred, top_k.")
 
 
 def main():
@@ -359,23 +363,45 @@ def main():
     for pool_name, (z_pool, smiles_pool, y_lookup) in retrieval_pools.items():
         rows = []
         seen_smiles: set[str] = set()
-        # Iterate all samples sorted by pred_pIC50 (best first) until top_k unique collected
-        for idx in order:
-            if len(seen_smiles) >= args.top_k:
-                break
-            pred_i = float(pred_batch[idx])
-            for smi, sim in retrieve_nearest(z_samples[idx], z_pool, smiles_pool, top_k=5):
+
+        if args.retrieval_mode == "nearest1":
+            # Each sampled latent → 1 nearest neighbor; collect all, dedup, sort, top_k
+            for idx in order:
+                pred_i = float(pred_batch[idx])
+                for smi, sim in retrieve_nearest(z_samples[idx], z_pool, smiles_pool, top_k=1):
+                    if smi not in seen_smiles:
+                        seen_smiles.add(smi)
+                        rows.append({
+                            "smiles": smi,
+                            "pred_pIC50": pred_i,
+                            "actual_pIC50": y_lookup.get(smi, float("nan")),
+                            "cosine_sim": float(sim),
+                            "source": pool_name,
+                        })
+            rows = (
+                pd.DataFrame(rows)
+                .sort_values(["pred_pIC50", "cosine_sim"], ascending=[False, False])
+                .head(args.top_k)
+                .to_dict("records")
+            )
+        else:
+            # diverse: best-pred-first, up to 5 neighbors/latent, until top_k unique
+            for idx in order:
                 if len(seen_smiles) >= args.top_k:
                     break
-                if smi not in seen_smiles:
-                    seen_smiles.add(smi)
-                    rows.append({
-                        "smiles": smi,
-                        "pred_pIC50": pred_i,
-                        "actual_pIC50": y_lookup.get(smi, float("nan")),
-                        "cosine_sim": float(sim),
-                        "source": pool_name,
-                    })
+                pred_i = float(pred_batch[idx])
+                for smi, sim in retrieve_nearest(z_samples[idx], z_pool, smiles_pool, top_k=5):
+                    if len(seen_smiles) >= args.top_k:
+                        break
+                    if smi not in seen_smiles:
+                        seen_smiles.add(smi)
+                        rows.append({
+                            "smiles": smi,
+                            "pred_pIC50": pred_i,
+                            "actual_pIC50": y_lookup.get(smi, float("nan")),
+                            "cosine_sim": float(sim),
+                            "source": pool_name,
+                        })
 
         _rows_df = pd.DataFrame(rows)
         n_unique = len(_rows_df)
@@ -383,7 +409,7 @@ def main():
         pool_df.to_csv(out_dir / f"top_candidates_{pool_name}.csv", index=False)
         all_rows.append(pool_df)
         _pool_dfs[pool_name] = pool_df
-        print(f"[sample_cfg] {pool_name}: unique={n_unique}  "
+        print(f"[sample_cfg] {pool_name} [{args.retrieval_mode}]: unique={n_unique}  "
               f"final={len(pool_df)} → top_candidates_{pool_name}.csv")
 
     # Combined (all pools, deduplicated)
