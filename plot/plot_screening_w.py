@@ -29,8 +29,8 @@ def main():
     parser.add_argument("--csv",  type=str, required=True)
     parser.add_argument("--out",  type=str, default=None)
     parser.add_argument("--metric", nargs="+",
-                        default=["mean_actual"],
-                        help="Columns to plot (default: mean_actual)")
+                        default=["mean_actual", "hit_rate", "n"],
+                        help="Columns to plot (default: mean_actual hit_rate n)")
     args = parser.parse_args()
 
     df = pd.read_csv(args.csv)
