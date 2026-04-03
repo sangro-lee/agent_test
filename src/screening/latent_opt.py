@@ -173,6 +173,9 @@ def train_diffusion_cfg(
     initial_cnot:  bool = False,  # fixed CNOT ring after AngleEmbedding
     full_encoding: bool = False,  # full W@x matrix encoding (reupload only)
     device: str = "cpu",
+    best_ckpt_path=None,            # Path | None — save immediately on best val loss
+    ckpt_meta: dict | None = None,  # extra fields merged into checkpoint
+    history_path=None,              # Path | None — write loss CSV after every epoch
 ):
     """
     Train a CONDITIONAL DenoisingMLP with classifier-free guidance.
@@ -364,9 +367,20 @@ def train_diffusion_cfg(
             denoiser.train()
 
         monitor_loss = val_loss if val_loss is not None else train_loss
-        if monitor_loss < best_loss:
+        improved = monitor_loss < best_loss
+        if improved:
             best_loss = monitor_loss
             best_state_dict = copy.deepcopy(denoiser.state_dict())
+            if best_ckpt_path is not None:
+                import torch as _torch
+                from pathlib import Path as _Path
+                _Path(best_ckpt_path).parent.mkdir(parents=True, exist_ok=True)
+                _ckpt = {"state_dict": best_state_dict,
+                         "z_mean": z_mean, "z_std": z_std,
+                         "c_mean": c_mean, "c_std": c_std}
+                if ckpt_meta:
+                    _ckpt.update(ckpt_meta)
+                _torch.save(_ckpt, best_ckpt_path)
 
         row = {"epoch": epoch + 1, "train_loss": train_loss}
         if val_loss is not None:
@@ -376,15 +390,26 @@ def train_diffusion_cfg(
             row["classical_grad_norm"] = cls_grad_sum / max(n_batches, 1)
         history.append(row)
 
-        if (epoch + 1) % 50 == 0:
-            msg = f"  [diffusion cfg] epoch {epoch+1}/{epochs} loss={train_loss:.4f}"
-            if val_loss is not None:
-                msg += f"  val={val_loss:.4f}"
-            msg += f"  best={best_loss:.4f}"
-            if _has_vqc:
-                msg += (f"  vqc_grad={row['vqc_grad_norm']:.2e}"
-                        f"  cls_grad={row['classical_grad_norm']:.2e}")
-            print(msg)
+        if history_path is not None:
+            import csv as _csv
+            from pathlib import Path as _Path
+            _hp = _Path(history_path)
+            _hp.parent.mkdir(parents=True, exist_ok=True)
+            with open(_hp, "w", newline="") as _f:
+                _w = _csv.DictWriter(_f, fieldnames=list(history[0].keys()))
+                _w.writeheader()
+                _w.writerows(history)
+
+        msg = f"  [diffusion cfg] epoch {epoch+1}/{epochs}  loss={train_loss:.4f}"
+        if val_loss is not None:
+            msg += f"  val={val_loss:.4f}"
+        msg += f"  best={best_loss:.4f}"
+        if improved:
+            msg += "  *"
+        if _has_vqc:
+            msg += (f"  vqc_grad={row['vqc_grad_norm']:.2e}"
+                    f"  cls_grad={row['classical_grad_norm']:.2e}")
+        print(msg)
 
     denoiser.eval()
     stats = (z_mean.astype(np.float32), z_std.astype(np.float32), c_mean, c_std)

@@ -23,8 +23,6 @@ torch.set_num_interop_threads(_n_cpu)
 import numpy as np
 from pathlib import Path
 
-import csv
-
 from src.screening.latent_opt import train_diffusion_cfg
 from src.utils.config import parse_config_args
 from src.utils.io import load_numpy, resolve_run_dir
@@ -118,6 +116,27 @@ def main():
     print(f"[train_diffusion] denoiser_type={denoiser_type}  unet_dims={unet_dims}")
     print(f"[train_diffusion] time_dim={time_dim}  cond_dim={cond_dim}")
 
+    # ---- Output dir (created before training for live checkpointing) ------
+    date_str = datetime.datetime.now().strftime("%Y-%m-%d")
+    out_dir = Path(run_dir) / "diffusion" / date_str / f"T{args.T}_ep{args.diff_epochs}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Static metadata known before training
+    _ckpt_meta = {
+        "model_type": model_type,
+        "denoiser_type": denoiser_type,
+        "latent_dim": latent_dim,
+        "T": args.T,
+        "time_dim": time_dim,
+        "cond_dim": cond_dim,
+        "hidden_dim": args.hidden_dim,
+        "n_layers": n_layers,
+        "num_blocks": num_blocks,
+        "unet_dims": unet_dims,
+        "initial_cnot": initial_cnot,
+        "full_encoding": full_encoding,
+    }
+
     # ---- Train CFG denoiser -----------------------------------------------
     denoiser, best_state_dict, stats, history = train_diffusion_cfg(
         z_train=z_train,
@@ -141,13 +160,13 @@ def main():
         initial_cnot=initial_cnot,
         full_encoding=full_encoding,
         device=device,
+        best_ckpt_path=out_dir / "denoiser_cfg.pt",
+        ckpt_meta=_ckpt_meta,
+        history_path=out_dir / "loss_history.csv",
     )
     z_mean, z_std, c_mean, c_std = stats
 
     # ---- Save -------------------------------------------------------------
-    date_str = datetime.datetime.now().strftime("%Y-%m-%d")
-    out_dir = Path(run_dir) / "diffusion" / date_str / f"T{args.T}_ep{args.diff_epochs}"
-    out_dir.mkdir(parents=True, exist_ok=True)
 
     def _ckpt(state_dict):
         ckpt = {
@@ -187,18 +206,11 @@ def main():
             ckpt["hidden_dim"] = args.hidden_dim
         return ckpt
 
-    # best loss checkpoint (used by sample_cfg.py)
+    # best loss checkpoint — re-save with full denoiser-specific metadata
     torch.save(_ckpt(best_state_dict), out_dir / "denoiser_cfg.pt")
     # final epoch checkpoint
     torch.save(_ckpt(denoiser.state_dict()), out_dir / "denoiser_cfg_final.pt")
-
-    # loss history CSV
-    if history:
-        keys = list(history[0].keys())
-        with open(out_dir / "loss_history.csv", "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=keys)
-            writer.writeheader()
-            writer.writerows(history)
+    # loss_history.csv already written per-epoch during training
 
     print(f"\n[train_diffusion] saved → {out_dir}/denoiser_cfg.pt (best loss)")
     print(f"[train_diffusion] saved → {out_dir}/denoiser_cfg_final.pt (final epoch)")
