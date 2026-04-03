@@ -3,14 +3,14 @@
 Compare training/validation loss across experiments from CSV files.
 
 Usage:
-  # All CSVs in plot/ directory
-  python scripts/plot_loss.py --csv_dir plot/
+  # All CSVs in current directory
+  python plot/plot_loss.py --csv_dir plot/
 
   # Specific files
-  python scripts/plot_loss.py --csv_dir plot/ --files mlp_z4.csv ortho_z4.csv vqc_z4_loss.csv
+  python plot/plot_loss.py --csv_dir plot/ --files mlp_z4.csv ortho_z4.csv vqc_z4_loss.csv
 
   # Custom output path
-  python scripts/plot_loss.py --csv_dir plot/ --out outputs/loss_comparison.png
+  python plot/plot_loss.py --csv_dir plot/ --out outputs/loss_comparison.png
 """
 from __future__ import annotations
 
