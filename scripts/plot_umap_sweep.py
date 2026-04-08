@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import itertools
 import shutil
 import subprocess
 import sys
@@ -31,11 +32,6 @@ def main():
 
     nn_list = args.n_neighbors
     md_list = args.min_dist
-    if len(md_list) == 1:
-        md_list = md_list * len(nn_list)
-    if len(nn_list) != len(md_list):
-        print("Error: --n_neighbors and --min_dist must match length (or single min_dist)")
-        sys.exit(1)
 
     if args.run_dir:
         run_dir = Path(args.run_dir)
@@ -53,7 +49,7 @@ def main():
     base_cmd = [sys.executable, str(ROOT / "scripts" / "plot_latents.py"),
                 *loc_args, "--no_tsne", "--splits", "train", "test"]
 
-    for nn, md in zip(nn_list, md_list):
+    for nn, md in itertools.product(nn_list, md_list):
         tag = f"n{nn}_d{md}"
         print(f"\n[sweep] n_neighbors={nn}  min_dist={md}")
         subprocess.run(base_cmd + ["--umap_n_neighbors", str(nn),
