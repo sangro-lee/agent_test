@@ -201,7 +201,7 @@ def main():
         if args.out:
             out_path = Path(args.out)
         else:
-            out_path = eval_dir / f"umap_sampled_{tag}.png"
+            out_path = eval_dir / f"umap_sampled_{tag}_{args.umap_metric}.png"
 
         fitted = plot_umap_sampled(
             run_dir=run_dir,
