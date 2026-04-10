@@ -28,6 +28,8 @@ def main():
     parser.add_argument("--n_neighbors", type=int,   nargs="+", default=[10, 20, 30, 50])
     parser.add_argument("--min_dist",    type=float, nargs="+", default=[0.1],
                         help="Single value applied to all, or one per n_neighbors")
+    parser.add_argument("--umap_metric", type=str,   default="euclidean",
+                        choices=["euclidean", "cosine"])
     args = parser.parse_args()
 
     nn_list = args.n_neighbors
@@ -47,7 +49,8 @@ def main():
     eval_dir = run_dir / "evaluation"
 
     base_cmd = [sys.executable, str(ROOT / "scripts" / "plot_latents.py"),
-                *loc_args, "--no_tsne", "--splits", "train", "test"]
+                *loc_args, "--no_tsne", "--splits", "train", "test",
+                "--umap_metric", args.umap_metric]
 
     for nn, md in itertools.product(nn_list, md_list):
         tag = f"n{nn}_d{md}"
