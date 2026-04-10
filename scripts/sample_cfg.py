@@ -425,11 +425,11 @@ def main():
         _rows_df = pd.DataFrame(rows)
         n_unique = len(_rows_df)
         pool_df = _rows_df.reset_index(drop=True)
-        pool_df.to_csv(out_dir / f"top_candidates_{pool_name}.csv", index=False)
+        pool_df.to_csv(out_dir / f"top_candidates_{pool_name}_{ret_metric}.csv", index=False)
         all_rows.append(pool_df)
         _pool_dfs[pool_name] = pool_df
         print(f"[sample_cfg] {pool_name} [{args.retrieval_mode}]: unique={n_unique}  "
-              f"final={len(pool_df)} → top_candidates_{pool_name}.csv")
+              f"final={len(pool_df)} → top_candidates_{pool_name}_{ret_metric}.csv")
 
     # Combined (all pools, deduplicated)
     candidates_df = (
@@ -439,7 +439,7 @@ def main():
         .head(args.top_k)
         .reset_index(drop=True)
     )
-    candidates_df.to_csv(out_dir / "top_candidates.csv", index=False)
+    candidates_df.to_csv(out_dir / f"top_candidates_{ret_metric}.csv", index=False)
 
     # t-SNE plot (after retrieval: highlight retrieved test molecules)
     if _tsne_emb_data is not None:
@@ -477,7 +477,7 @@ def main():
             print(f"[sample_cfg] t-SNE plot failed: {_e}")
 
     best_pred = float(pred_batch.max()) if len(pred_batch) else float("nan")
-    print(f"\n[sample_cfg] best_pred_pIC50={best_pred:.4f}")
+    print(f"\n[sample_cfg] best_pred_pIC50={best_pred:.4f}  retrieval={ret_metric}")
     print(f"[sample_cfg] saved → {out_dir}/")
     print(candidates_df.head(10).to_string(index=False))
 
