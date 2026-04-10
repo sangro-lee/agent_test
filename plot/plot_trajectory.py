@@ -16,6 +16,12 @@ Usage:
       --run_dir outputs/runs/rgcn_mlp_z4 \
       --traj .../z_trajectory.npy \
       --n_show 30 --out outputs/traj.png
+
+  # use pre-fitted reducer (same coordinate frame as evaluate_plot / plot_latents)
+  python plot/plot_trajectory.py \
+      --run_dir outputs/runs/rgcn_mlp_z4 \
+      --traj .../z_trajectory.npy \
+      --load_reducer outputs/umap_reducer.pkl
 """
 from __future__ import annotations
 
@@ -39,13 +45,17 @@ def main():
                         help="Path to z_trajectory.npy")
     parser.add_argument("--n_show",   type=int, default=50,
                         help="Number of sample trajectories to draw (default: 50)")
-    parser.add_argument("--n_neighbors", type=int,   default=30)
-    parser.add_argument("--min_dist",    type=float, default=0.3)
-    parser.add_argument("--out",      type=str, default=None,
+    parser.add_argument("--n_neighbors",  type=int,   default=30)
+    parser.add_argument("--min_dist",     type=float, default=0.3)
+    parser.add_argument("--load_reducer", type=str,   default=None,
+                        help="Path to pre-fitted UMAP reducer (.pkl) — skips fitting")
+    parser.add_argument("--save_reducer", type=str,   default=None,
+                        help="Path to save fitted UMAP reducer (.pkl)")
+    parser.add_argument("--out",          type=str,   default=None,
                         help="Output PNG path (default: same dir as traj)")
     args = parser.parse_args()
 
-    run_dir  = Path(args.run_dir)
+    run_dir   = Path(args.run_dir)
     traj_path = Path(args.traj)
 
     # ── Load ──────────────────────────────────────────────────────────────
@@ -62,12 +72,22 @@ def main():
     y_train_path = run_dir / "y_train.npy"
     y_train = np.load(y_train_path).astype(np.float32) if y_train_path.exists() else np.zeros(len(z_train))
 
-    # ── Fit UMAP on train ─────────────────────────────────────────────────
-    print(f"[plot_trajectory] Fitting UMAP on train (n={len(z_train)})...")
-    reducer = make_umap_reducer(z_train, n_neighbors=args.n_neighbors, min_dist=args.min_dist)
-    if reducer is None:
-        print("[plot_trajectory] umap-learn not installed. Run: pip install umap-learn")
-        sys.exit(1)
+    # ── Load or fit UMAP reducer ──────────────────────────────────────────
+    if args.load_reducer:
+        import joblib
+        reducer = joblib.load(args.load_reducer)
+        print(f"[plot_trajectory] Loaded reducer: {args.load_reducer}")
+    else:
+        print(f"[plot_trajectory] Fitting UMAP on train (n={len(z_train)})...")
+        reducer = make_umap_reducer(z_train, n_neighbors=args.n_neighbors, min_dist=args.min_dist)
+        if reducer is None:
+            print("[plot_trajectory] umap-learn not installed. Run: pip install umap-learn")
+            sys.exit(1)
+        if args.save_reducer:
+            import joblib
+            Path(args.save_reducer).parent.mkdir(parents=True, exist_ok=True)
+            joblib.dump(reducer, args.save_reducer)
+            print(f"[plot_trajectory] Saved reducer: {args.save_reducer}")
 
     emb_train = reducer.transform(z_train)
 
