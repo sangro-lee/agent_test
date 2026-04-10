@@ -56,6 +56,9 @@ def _extra_args(parser):
                         help="Number of top candidates to save")
     parser.add_argument("--T", type=int, default=1000,
                         help="Diffusion timesteps")
+    parser.add_argument("--retrieval_metric", type=str, default="cosine",
+                        choices=["cosine", "euclidean"],
+                        help="Distance metric for nearest-neighbor retrieval (default: cosine)")
 
 
 def resolve_device(device_cfg: str) -> torch.device:
@@ -278,28 +281,33 @@ def main():
     order = np.argsort(-pred_batch)
     top_indices = order[: min(int(args.top_k), len(order))]
 
+    ret_metric = args.retrieval_metric
+    sim_col = "cosine_sim" if ret_metric == "cosine" else "euclidean_dist"
+
     rows = []
     for idx in top_indices:
         z_i = z_samples[idx]
         pred_i = float(pred_batch[idx])
-        for smi, sim in retrieve_nearest(z_i, z_train, smiles_train, top_k=5):
-            rows.append({"smiles": smi, "pred_pIC50": pred_i, "cosine_sim": float(sim)})
+        for smi, score in retrieve_nearest(z_i, z_train, smiles_train, top_k=5, metric=ret_metric):
+            val = float(score) if ret_metric == "cosine" else float(-score)  # store as positive dist
+            rows.append({"smiles": smi, "pred_pIC50": pred_i, sim_col: val})
 
     candidates_df = pd.DataFrame(rows)
     if len(candidates_df) > 0:
+        ascending_sim = ret_metric != "cosine"  # cosine: higher=better; euclidean dist: lower=better
         candidates_df = (
             candidates_df
-            .sort_values(["pred_pIC50", "cosine_sim"], ascending=[False, False])
+            .sort_values(["pred_pIC50", sim_col], ascending=[False, ascending_sim])
             .drop_duplicates(subset=["smiles"], keep="first")
             .head(int(args.top_k))
             .reset_index(drop=True)
         )
 
     np.save(out_dir / "z_samples.npy", z_samples)
-    candidates_df.to_csv(out_dir / "top_candidates.csv", index=False)
+    candidates_df.to_csv(out_dir / f"top_candidates_{ret_metric}.csv", index=False)
 
     best_pred = float(pred_batch.max()) if len(pred_batch) else float("nan")
-    print(f"\n[latent_opt] sampled={len(z_samples)}  best_pred_pIC50={best_pred:.4f}")
+    print(f"\n[latent_opt] sampled={len(z_samples)}  best_pred_pIC50={best_pred:.4f}  retrieval={ret_metric}")
     print(f"[latent_opt] saved → {out_dir}/")
 
 

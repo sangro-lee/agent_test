@@ -61,6 +61,7 @@ def retrieve_nearest(
     z_train,
     smiles_train: List[str],
     top_k: int,
+    metric: str = "cosine",
 ) -> List[Tuple[str, float]]:
     z_opt = np.asarray(z_opt, dtype=float).reshape(1, -1)
     z_train = np.asarray(z_train, dtype=float)
@@ -68,12 +69,18 @@ def retrieve_nearest(
     if z_train.ndim != 2 or z_train.shape[0] != len(smiles_train):
         raise ValueError("z_train shape must be (N, D) and match smiles_train length.")
 
-    z_opt_norm = z_opt / (np.linalg.norm(z_opt, axis=1, keepdims=True) + 1e-12)
-    z_train_norm = z_train / (np.linalg.norm(z_train, axis=1, keepdims=True) + 1e-12)
-    sims = (z_train_norm @ z_opt_norm.T).reshape(-1)
+    if metric == "cosine":
+        z_opt_norm = z_opt / (np.linalg.norm(z_opt, axis=1, keepdims=True) + 1e-12)
+        z_train_norm = z_train / (np.linalg.norm(z_train, axis=1, keepdims=True) + 1e-12)
+        scores = (z_train_norm @ z_opt_norm.T).reshape(-1)
+        order = np.argsort(-scores)
+    else:  # euclidean — smaller distance = better, negate for consistent argsort
+        diffs = z_train - z_opt  # (N, D)
+        scores = -np.linalg.norm(diffs, axis=1)  # negative dist, higher = closer
+        order = np.argsort(-scores)
 
-    order = np.argsort(-sims)[: int(top_k)]
-    return [(smiles_train[i], float(sims[i])) for i in order]
+    order = order[: int(top_k)]
+    return [(smiles_train[i], float(scores[i])) for i in order]
 
 
 # ---------------------------------------------------------------------------
