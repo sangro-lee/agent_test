@@ -54,7 +54,8 @@ def plot_loss_curve(history, save_path):
     plt.close(fig)
 
 
-def make_umap_reducer(latents: np.ndarray, n_neighbors: int = 15, min_dist: float = 0.1):
+def make_umap_reducer(latents: np.ndarray, n_neighbors: int = 15, min_dist: float = 0.1,
+                      metric: str = "euclidean"):
     """Fit and return a UMAP reducer on the given latents (for reuse across plots)."""
     try:
         import umap as umap_lib
@@ -63,7 +64,7 @@ def make_umap_reducer(latents: np.ndarray, n_neighbors: int = 15, min_dist: floa
     latents = np.asarray(latents, dtype=float)
     n_neighbors = min(n_neighbors, latents.shape[0] - 1)
     reducer = umap_lib.UMAP(n_components=2, n_neighbors=n_neighbors, min_dist=min_dist,
-                            init="random", random_state=42)
+                            metric=metric, init="random", random_state=42)
     reducer.fit(latents)
     return reducer
 

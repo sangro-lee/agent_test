@@ -44,6 +44,7 @@ def plot_umap_sampled(
     reducer=None,
     n_neighbors: int = 30,
     min_dist: float = 0.3,
+    metric: str = "euclidean",
 ) -> object:
     """Plot UMAP with train/test background and sampled latents overlay.
 
@@ -86,7 +87,7 @@ def plot_umap_sampled(
     # ── Fit or use provided reducer ───────────────────────────────────────
     if reducer is None:
         print(f"[evaluate_plot] Fitting UMAP on train (n={len(z_train)})...")
-        reducer = make_umap_reducer(z_train, n_neighbors=n_neighbors, min_dist=min_dist)
+        reducer = make_umap_reducer(z_train, n_neighbors=n_neighbors, min_dist=min_dist, metric=metric)
         if reducer is None:
             raise ImportError("umap-learn not installed. Run: pip install umap-learn")
 
@@ -161,6 +162,9 @@ def main():
                         help="Output PNG path. Default: run_dir/evaluation/umap_sampled_<tag>.png")
     parser.add_argument("--n_neighbors",  type=int,   default=30)
     parser.add_argument("--min_dist",     type=float, default=0.3)
+    parser.add_argument("--umap_metric",  type=str,   default="euclidean",
+                        choices=["euclidean", "cosine"],
+                        help="Distance metric for UMAP (default: euclidean)")
     args = parser.parse_args()
 
     # ── Resolve run_dir ───────────────────────────────────────────────────
@@ -206,6 +210,7 @@ def main():
             reducer=reducer,
             n_neighbors=args.n_neighbors,
             min_dist=args.min_dist,
+            metric=args.umap_metric,
         )
         # Reuse the first fitted reducer for subsequent z_samples
         if reducer is None:
