@@ -45,6 +45,8 @@ def main():
     parser.add_argument("--no_umap",          action="store_true")
     parser.add_argument("--umap_n_neighbors", type=int,   default=15)
     parser.add_argument("--umap_min_dist",    type=float, default=0.1)
+    parser.add_argument("--umap_metric",      type=str,   default="euclidean",
+                        choices=["euclidean", "cosine"])
     args = parser.parse_args()
 
     if args.config:
@@ -73,7 +75,8 @@ def main():
                 ref_z = np.load(ref_train).astype(np.float32)
                 print(f"[plot_latents] Fitting UMAP on {ref_dir.name} (n={len(ref_z)})...")
                 umap_reducer = make_umap_reducer(ref_z, n_neighbors=args.umap_n_neighbors,
-                                                 min_dist=args.umap_min_dist)
+                                                 min_dist=args.umap_min_dist,
+                                                 metric=args.umap_metric)
                 if args.save_reducer and umap_reducer is not None:
                     import joblib
                     Path(args.save_reducer).parent.mkdir(parents=True, exist_ok=True)
