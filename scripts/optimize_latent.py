@@ -187,7 +187,7 @@ def main():
         z_mean, z_std, c_mean, c_std = stats
 
         print("[latent_opt] Sampling with CFG...")
-        z_samples = sample_cfg(
+        z_samples, _ = sample_cfg(
             denoiser=denoiser,
             target_pic50=target_pic50,
             latent_dim=latent_dim,

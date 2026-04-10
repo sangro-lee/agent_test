@@ -59,6 +59,10 @@ def _extra_args(parser):
                         choices=["diverse", "nearest1"],
                         help="diverse: best-pred-first, up to 5 neighbors/latent until top_k unique. "
                              "nearest1: 1 nearest per latent (all samples), dedup, sort by pred, top_k.")
+    parser.add_argument("--save_trajectory", action="store_true",
+                        help="Save denoising trajectory as z_trajectory.npy")
+    parser.add_argument("--traj_every",      type=int, default=50,
+                        help="Save trajectory snapshot every N steps (default: 50)")
 
 
 def main():
@@ -202,7 +206,7 @@ def main():
     print(f"[sample_cfg] n_samples={args.n_samples}  sampler={args.sampler}  T={T}")
 
     # ---- Sample -----------------------------------------------------------
-    z_samples = sample_cfg(
+    z_samples, z_trajectory = sample_cfg(
         denoiser=denoiser,
         target_pic50=target_pic50,
         latent_dim=latent_dim,
@@ -211,6 +215,7 @@ def main():
         guidance_scale=args.guidance_scale,
         sampler=args.sampler,
         device=device,
+        traj_every=args.traj_every if args.save_trajectory else 0,
     )
 
     # Latent diversity diagnostic (compare to train latents)
@@ -316,6 +321,9 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     np.save(out_dir / "z_samples.npy", z_samples)
+    if z_trajectory is not None:
+        np.save(out_dir / "z_trajectory.npy", z_trajectory)
+        print(f"[sample_cfg] Saved trajectory: {z_trajectory.shape}  → z_trajectory.npy")
 
     import json
     with open(out_dir / "diversity.json", "w") as _f:

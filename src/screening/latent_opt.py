@@ -496,7 +496,8 @@ def sample_cfg(
     guidance_scale: float = 3.0,  # w in: eps_uncond + w*(eps_cond - eps_uncond)
     sampler: str = "ddim",
     device: str = "cpu",
-) -> np.ndarray:
+    traj_every: int = 0,          # >0: save denormalized z every N steps
+) -> tuple[np.ndarray, np.ndarray | None]:
     """
     Sampling with CLASSIFIER-FREE GUIDANCE (CFG).
     Trains both conditional & unconditional via p_uncond dropout.
@@ -508,6 +509,11 @@ def sample_cfg(
 
     Args:
         target_pic50: desired pIC50 value in original scale (e.g., 8.0)
+        traj_every: if >0, record denormalized z_t every N steps.
+                    Returns trajectory array of shape (n_checkpoints, n_samples, latent_dim).
+
+    Returns:
+        (z0, trajectory) where trajectory is None when traj_every=0.
     """
     device_t = torch.device(device)
     denoiser = denoiser.to(device_t).eval()
@@ -527,6 +533,10 @@ def sample_cfg(
     c_null = torch.full((int(n_samples), 1), ConditionalDenoisingMLP.NULL_COND, device=device_t)
 
     z_t = torch.randn(int(n_samples), int(latent_dim), device=device_t)
+    traj_frames: list[np.ndarray] = []
+
+    def _denorm(z: torch.Tensor) -> np.ndarray:
+        return (z * z_std.unsqueeze(0) + z_mean.unsqueeze(0)).detach().cpu().numpy()
 
     with torch.no_grad():
         for t_int in range(int(T), 0, -1):
@@ -543,6 +553,18 @@ def sample_cfg(
             else:  # ddim
                 z_t = scheduler.ddim_step(z_t, t_int=t_int, eps_pred=eps_guided, eta=0.0)
 
+            if traj_every > 0 and (int(T) - t_int) % traj_every == 0:
+                traj_frames.append(_denorm(z_t))
+
     # Denormalize
     z0 = z_t * z_std.unsqueeze(0) + z_mean.unsqueeze(0)
-    return z0.detach().cpu().numpy()
+    z0_np = z0.detach().cpu().numpy()
+
+    if traj_every > 0:
+        # Always include final step
+        traj_frames.append(z0_np)
+        trajectory = np.stack(traj_frames, axis=0)  # (n_checkpoints, n_samples, latent_dim)
+    else:
+        trajectory = None
+
+    return z0_np, trajectory
