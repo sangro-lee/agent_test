@@ -59,6 +59,9 @@ def _extra_args(parser):
                         choices=["diverse", "nearest1"],
                         help="diverse: best-pred-first, up to 5 neighbors/latent until top_k unique. "
                              "nearest1: 1 nearest per latent (all samples), dedup, sort by pred, top_k.")
+    parser.add_argument("--retrieval_metric", type=str, default="cosine",
+                        choices=["cosine", "euclidean"],
+                        help="Distance metric for nearest-neighbor retrieval (default: cosine)")
     parser.add_argument("--save_trajectory", action="store_true",
                         help="Save denoising trajectory as z_trajectory.npy")
     parser.add_argument("--traj_every",      type=int, default=50,
@@ -366,6 +369,10 @@ def main():
     except Exception as _e:
         print(f"[sample_cfg] t-SNE skipped: {_e}")
 
+    ret_metric = args.retrieval_metric
+    sim_col = "cosine_sim" if ret_metric == "cosine" else "euclidean_dist"
+    sim_ascending = ret_metric != "cosine"  # cosine: higher=better; euclidean dist: lower=better
+
     all_rows = []
     _pool_dfs = {}
     for pool_name, (z_pool, smiles_pool, y_lookup) in retrieval_pools.items():
@@ -376,19 +383,21 @@ def main():
             # Each sampled latent → 1 nearest neighbor; collect all, dedup, sort, top_k
             for idx in order:
                 pred_i = float(pred_batch[idx])
-                for smi, sim in retrieve_nearest(z_samples[idx], z_pool, smiles_pool, top_k=1):
+                for smi, score in retrieve_nearest(z_samples[idx], z_pool, smiles_pool,
+                                                   top_k=1, metric=ret_metric):
                     if smi not in seen_smiles:
                         seen_smiles.add(smi)
+                        val = float(score) if ret_metric == "cosine" else float(-score)
                         rows.append({
                             "smiles": smi,
                             "pred_pIC50": pred_i,
                             "actual_pIC50": y_lookup.get(smi, float("nan")),
-                            "cosine_sim": float(sim),
+                            sim_col: val,
                             "source": pool_name,
                         })
             rows = (
                 pd.DataFrame(rows)
-                .sort_values(["pred_pIC50", "cosine_sim"], ascending=[False, False])
+                .sort_values(["pred_pIC50", sim_col], ascending=[False, sim_ascending])
                 .head(args.top_k)
                 .to_dict("records")
             )
@@ -398,16 +407,18 @@ def main():
                 if len(seen_smiles) >= args.top_k:
                     break
                 pred_i = float(pred_batch[idx])
-                for smi, sim in retrieve_nearest(z_samples[idx], z_pool, smiles_pool, top_k=5):
+                for smi, score in retrieve_nearest(z_samples[idx], z_pool, smiles_pool,
+                                                   top_k=5, metric=ret_metric):
                     if len(seen_smiles) >= args.top_k:
                         break
                     if smi not in seen_smiles:
                         seen_smiles.add(smi)
+                        val = float(score) if ret_metric == "cosine" else float(-score)
                         rows.append({
                             "smiles": smi,
                             "pred_pIC50": pred_i,
                             "actual_pIC50": y_lookup.get(smi, float("nan")),
-                            "cosine_sim": float(sim),
+                            sim_col: val,
                             "source": pool_name,
                         })
 
@@ -423,7 +434,7 @@ def main():
     # Combined (all pools, deduplicated)
     candidates_df = (
         pd.concat(all_rows, ignore_index=True)
-        .sort_values(["pred_pIC50", "cosine_sim"], ascending=[False, False])
+        .sort_values(["pred_pIC50", sim_col], ascending=[False, sim_ascending])
         .drop_duplicates(subset=["smiles"], keep="first")
         .head(args.top_k)
         .reset_index(drop=True)
