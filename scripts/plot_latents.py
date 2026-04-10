@@ -99,10 +99,11 @@ def main():
             plot_latent_tsne(latents, y, eval_dir / f"tsne_{split}.png", split_name=split)
             print(f"  Saved: tsne_{split}.png")
         if not args.no_umap:
-            plot_latent_umap(latents, y, eval_dir / f"umap_{split}.png",
+            umap_fname = f"umap_{split}_{args.umap_metric}.png"
+            plot_latent_umap(latents, y, eval_dir / umap_fname,
                              split_name=split, n_neighbors=args.umap_n_neighbors,
                              min_dist=args.umap_min_dist, reducer=umap_reducer)
-            print(f"  Saved: umap_{split}.png")
+            print(f"  Saved: {umap_fname}")
 
         all_latents.append(latents)
         all_y.append(y)
@@ -115,10 +116,11 @@ def main():
             plot_latent_tsne(combined, combined_y, eval_dir / "tsne_all.png", split_name="all splits")
             print("  Saved: tsne_all.png")
         if not args.no_umap:
-            plot_latent_umap(combined, combined_y, eval_dir / "umap_all.png",
+            umap_all_fname = f"umap_all_{args.umap_metric}.png"
+            plot_latent_umap(combined, combined_y, eval_dir / umap_all_fname,
                              split_name="all splits", n_neighbors=args.umap_n_neighbors,
                              min_dist=args.umap_min_dist, reducer=umap_reducer)
-            print("  Saved: umap_all.png")
+            print(f"  Saved: {umap_all_fname}")
 
 
 if __name__ == "__main__":

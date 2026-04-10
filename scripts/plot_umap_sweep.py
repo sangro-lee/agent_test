@@ -58,8 +58,8 @@ def main():
         subprocess.run(base_cmd + ["--umap_n_neighbors", str(nn),
                                    "--umap_min_dist",    str(md)], check=True)
 
-        src = eval_dir / "umap_all.png"
-        dst = eval_dir / f"umap_all_{tag}.png"
+        src = eval_dir / f"umap_all_{args.umap_metric}.png"
+        dst = eval_dir / f"umap_all_{args.umap_metric}_{tag}.png"
         if src.exists():
             shutil.move(str(src), str(dst))
             print(f"  → {dst.name}")
