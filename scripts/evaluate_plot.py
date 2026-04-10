@@ -45,6 +45,7 @@ def plot_umap_sampled(
     n_neighbors: int = 30,
     min_dist: float = 0.3,
     metric: str = "euclidean",
+    retrieval_metric: str = "cosine",
 ) -> object:
     """Plot UMAP with train/test background and sampled latents overlay.
 
@@ -75,7 +76,7 @@ def plot_umap_sampled(
     # ── Load retrieved test SMILES (from top_candidates_test.csv) ─────────
     retrieved_test_idx: list[int] = []
     smiles_test: list[str] = []
-    _cand_path = z_samples_path.parent / "top_candidates_test.csv"
+    _cand_path = z_samples_path.parent / f"top_candidates_test_{retrieval_metric}.csv"
     _smiles_test_path = run_dir / "smiles_test.npy"
     if _cand_path.exists() and _smiles_test_path.exists():
         import pandas as pd
@@ -162,9 +163,12 @@ def main():
                         help="Output PNG path. Default: run_dir/evaluation/umap_sampled_<tag>.png")
     parser.add_argument("--n_neighbors",  type=int,   default=30)
     parser.add_argument("--min_dist",     type=float, default=0.3)
-    parser.add_argument("--umap_metric",  type=str,   default="euclidean",
+    parser.add_argument("--umap_metric",       type=str, default="euclidean",
                         choices=["euclidean", "cosine"],
                         help="Distance metric for UMAP (default: euclidean)")
+    parser.add_argument("--retrieval_metric", type=str, default="cosine",
+                        choices=["cosine", "euclidean"],
+                        help="Metric used during sampling retrieval (default: cosine)")
     args = parser.parse_args()
 
     # ── Resolve run_dir ───────────────────────────────────────────────────
@@ -211,6 +215,7 @@ def main():
             n_neighbors=args.n_neighbors,
             min_dist=args.min_dist,
             metric=args.umap_metric,
+            retrieval_metric=args.retrieval_metric,
         )
         # Reuse the first fitted reducer for subsequent z_samples
         if reducer is None:

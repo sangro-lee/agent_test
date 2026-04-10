@@ -66,6 +66,8 @@ def _extra_args(parser):
                         help="Save denoising trajectory as z_trajectory.npy")
     parser.add_argument("--traj_every",      type=int, default=50,
                         help="Save trajectory snapshot every N steps (default: 50)")
+    parser.add_argument("--retrieval_only", action="store_true",
+                        help="Skip diffusion sampling — load existing z_samples.npy and redo retrieval only")
 
 
 def main():
@@ -208,18 +210,32 @@ def main():
     print(f"[sample_cfg] target_pIC50={target_pic50:.3f}  guidance_scale={args.guidance_scale}")
     print(f"[sample_cfg] n_samples={args.n_samples}  sampler={args.sampler}  T={T}")
 
-    # ---- Sample -----------------------------------------------------------
-    z_samples, z_trajectory = sample_cfg(
-        denoiser=denoiser,
-        target_pic50=target_pic50,
-        latent_dim=latent_dim,
-        n_samples=args.n_samples,
-        T=T,
-        guidance_scale=args.guidance_scale,
-        sampler=args.sampler,
-        device=device,
-        traj_every=args.traj_every if args.save_trajectory else 0,
-    )
+    # ---- Resolve output directory early (needed for --retrieval_only) -----
+    w_tag = f"cfg_w{args.guidance_scale:.1f}_{args.sampler}"
+    out_dir = Path(run_dir) / _diff_subdir / w_tag
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # ---- Sample (or load existing) ----------------------------------------
+    if args.retrieval_only:
+        _z_path = out_dir / "z_samples.npy"
+        if not _z_path.exists():
+            raise FileNotFoundError(f"z_samples.npy not found: {_z_path}\nRun without --retrieval_only first.")
+        z_samples = np.load(_z_path).astype(np.float32)
+        z_trajectory = None
+        print(f"[sample_cfg] Loaded z_samples: {z_samples.shape}  from {_z_path}")
+        print("[sample_cfg] Skipping diffusion sampling — retrieval only.")
+    else:
+        z_samples, z_trajectory = sample_cfg(
+            denoiser=denoiser,
+            target_pic50=target_pic50,
+            latent_dim=latent_dim,
+            n_samples=args.n_samples,
+            T=T,
+            guidance_scale=args.guidance_scale,
+            sampler=args.sampler,
+            device=device,
+            traj_every=args.traj_every if args.save_trajectory else 0,
+        )
 
     # Latent diversity diagnostic (compare to train latents)
     z_std_per_dim = z_samples.std(axis=0)
@@ -319,11 +335,8 @@ def main():
               f"topk_ratio={_topk_ratio:.3f}  "
               f"({'OK' if _topk_ratio > 0.7 else 'low' if _topk_ratio > 0.3 else 'COLLAPSE'})")
 
-    w_tag = f"cfg_w{args.guidance_scale:.1f}_{args.sampler}"
-    out_dir = Path(run_dir) / _diff_subdir / w_tag
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    np.save(out_dir / "z_samples.npy", z_samples)
+    if not args.retrieval_only:
+        np.save(out_dir / "z_samples.npy", z_samples)
     if z_trajectory is not None:
         np.save(out_dir / "z_trajectory.npy", z_trajectory)
         print(f"[sample_cfg] Saved trajectory: {z_trajectory.shape}  → z_trajectory.npy")
