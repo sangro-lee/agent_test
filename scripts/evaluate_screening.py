@@ -135,7 +135,12 @@ def compute_metrics(df: pd.DataFrame, threshold: float) -> dict:
             "hit_rate":    float("nan"),
             "mean_pred":   float(df["pred_pIC50"].mean()) if len(df) else float("nan"),
         }
-    mean_sim = float(valid["cosine_sim"].mean()) if "cosine_sim" in valid.columns else float("nan")
+    if "cosine_sim" in valid.columns:
+        mean_sim = float(valid["cosine_sim"].mean())
+    elif "euclidean_dist" in valid.columns:
+        mean_sim = float(valid["euclidean_dist"].mean())
+    else:
+        mean_sim = float("nan")
     return {
         "n":           len(valid),
         "mean_actual": float(valid["actual_pIC50"].mean()),
