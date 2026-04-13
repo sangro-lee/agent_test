@@ -151,8 +151,13 @@ def main():
     parser.add_argument("--runs_dir",  default=str(ROOT / "outputs" / "runs"))
     parser.add_argument("--threshold", type=float, default=7.0,
                         help="pIC50 threshold for hit_rate (default: 7.0)")
-    parser.add_argument("--csv",       default="top_candidates_test.csv",
-                        help="CSV filename to look for (default: top_candidates_test.csv)")
+    parser.add_argument("--retrieval_metric", type=str, default=None,
+                        choices=["cosine", "euclidean"],
+                        help="Retrieval metric used during sampling; sets default --csv to "
+                             "top_candidates_test_{metric}.csv")
+    parser.add_argument("--csv",       default=None,
+                        help="CSV filename to look for (default: top_candidates_test_{retrieval_metric}.csv "
+                             "or top_candidates_test.csv)")
     parser.add_argument("--out",       default=str(ROOT / "outputs" / "screening_comparison.png"))
     parser.add_argument("--umap",      action="store_true",
                         help="Generate UMAP plots per experiment (requires umap-learn)")
@@ -161,6 +166,12 @@ def main():
     parser.add_argument("--umap_min_dist",    type=float, default=0.1,
                         help="UMAP min_dist (default: 0.1)")
     args = parser.parse_args()
+
+    if args.csv is None:
+        if args.retrieval_metric:
+            args.csv = f"top_candidates_test_{args.retrieval_metric}.csv"
+        else:
+            args.csv = "top_candidates_test.csv"
 
     pattern = f"*/diffusion/**/{args.csv}"
     csvs = sorted(Path(args.runs_dir).glob(pattern))

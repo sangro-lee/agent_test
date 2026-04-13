@@ -31,6 +31,8 @@ def main():
     parser.add_argument("--metric", nargs="+",
                         default=["mean_actual", "hit_rate", "n"],
                         help="Columns to plot (default: mean_actual hit_rate n)")
+    parser.add_argument("--save_csv", type=str, default=None,
+                        help="Path to save results as CSV (default: same dir as --out, w_sweep.csv)")
     args = parser.parse_args()
 
     df = pd.read_csv(args.csv)
@@ -64,6 +66,13 @@ def main():
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"[plot_screening_w] Saved: {out_path}")
+
+    # Save CSV
+    save_cols = ["exp", "w"] + [m for m in metrics if m in df.columns]
+    result_df = df[save_cols].sort_values(["exp", "w"]).reset_index(drop=True)
+    csv_out = Path(args.save_csv) if args.save_csv else out_path.with_suffix(".csv")
+    result_df.to_csv(csv_out, index=False)
+    print(f"[plot_screening_w] CSV: {csv_out}")
 
 
 if __name__ == "__main__":
