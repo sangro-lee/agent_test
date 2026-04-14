@@ -632,3 +632,127 @@ class QubitCondVQCDenoiser(nn.Module):
             x = x + q_out                                # residual
 
         return x                                          # ε̂ (B, latent_dim)
+
+
+class BornRuleVQCDenoiser(nn.Module):
+    """
+    VQC score denoiser via Born rule (quantum EBM analog).
+
+    Instead of directly predicting score, the VQC defines a probability
+    distribution P_t(z_t, t, c) via Born rule measurement. The score is
+    computed as ∇_{z_t} log P_t via autograd.
+
+        EBM (classical):  p(x) ∝ exp(-E_θ(x)),  score = -∇E_θ   (autograd, Z not known)
+        BornRule (VQC):   P(x) = |<ψ_θ|x>|²,    score = ∇log P  (autograd, ∑P=1 guaranteed)
+
+    Circuit: AngleEmbedding([z_t | t | sigmoid(c)]) → VQC layers → qml.probs(latent qubits)
+    Log-prob: log max_k P(|k⟩|z_t)  — dominant measurement outcome per sample.
+              Each z_t drives the quantum state toward a different peak; the gradient
+              flows only through that winning basis state → natural geometry-aware score.
+    Loss:    DSM = E[||score + ε/σ_t||²]
+    """
+
+    NULL_COND = 0.0
+
+    def __init__(
+        self,
+        latent_dim:  int = 4,
+        n_layers:    int = 2,
+        num_blocks:  int = 1,   # kept for interface compat; uses n_layers * num_blocks depth
+        time_dim:    int = 32,  # unused (no classical cond embedding), kept for compat
+        cond_dim:    int = 32,  # unused (no classical cond embedding), kept for compat
+        device_type: str = "default.qubit",
+    ):
+        super().__init__()
+        self.latent_dim = int(latent_dim)
+        self.n_layers   = int(n_layers)
+        self.num_blocks = int(num_blocks)
+
+        n_total = latent_dim + 2           # latent qubits + t qubit + c qubit
+
+        _pi = math.pi
+        dev = qml.device(device_type, wires=n_total)
+        params_per_layer = n_total * 3 + n_total * 3
+        eff_layers = int(n_layers) * int(num_blocks)
+        weight_shapes = {"theta": (params_per_layer * eff_layers,)}
+
+        @qml.qnode(dev, interface="torch", diff_method="backprop")
+        def circuit(inputs, theta):
+            # inputs: (D+2,) = [z_angles(D), t(1), sigmoid(c)(1)]
+            qml.AngleEmbedding(inputs * _pi, wires=range(n_total), rotation="Y")
+            param_idx = 0
+            for _ in range(eff_layers):
+                for i in range(n_total):
+                    qml.RZ(theta[param_idx],     wires=i)
+                    qml.RY(theta[param_idx + 1], wires=i)
+                    qml.RZ(theta[param_idx + 2], wires=i)
+                    param_idx += 3
+                for p in range(n_total):
+                    nxt = (p + 1) % n_total
+                    qml.RZ(-_pi / 2,             wires=nxt)
+                    qml.CNOT(wires=[nxt, p])
+                    qml.RZ(theta[param_idx],     wires=p)
+                    qml.RY(theta[param_idx + 1], wires=nxt)
+                    qml.CNOT(wires=[p, nxt])
+                    qml.RY(theta[param_idx + 2], wires=nxt)
+                    param_idx += 3
+            # Born rule: measure latent qubits only → (2^latent_dim,) probability vector
+            return qml.probs(wires=range(latent_dim))
+
+        self.vqc = qml.qnn.TorchLayer(circuit, weight_shapes)
+
+        # Marks this denoiser as score-based (forward returns score, not ε)
+        self.prediction_type = "score"
+
+        self.register_buffer("z_mean", torch.zeros(latent_dim), persistent=True)
+        self.register_buffer("z_std",  torch.ones(latent_dim),  persistent=True)
+        self.register_buffer("c_mean", torch.zeros(1),           persistent=True)
+        self.register_buffer("c_std",  torch.ones(1),            persistent=True)
+
+    def set_normalization(self, z_mean, z_std, c_mean=None, c_std=None):
+        self.z_mean.copy_(z_mean.detach())
+        self.z_std.copy_(z_std.detach())
+        if c_mean is not None:
+            self.c_mean.copy_(c_mean.detach().view(1))
+        if c_std is not None:
+            self.c_std.copy_(c_std.detach().view(1))
+
+    def to(self, *args, **kwargs):
+        super().to(*args, **kwargs)
+        self.vqc.cpu()
+        return self
+
+    def _log_prob(self, z_t: torch.Tensor, t: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+        """Compute log P_t(z_t, t, c) per sample. Returns (B,).
+
+        Uses log max_k P(|k⟩|z_t): the log probability of the dominant
+        measurement outcome for each sample. Each z_t drives the circuit
+        to a different peak; gradient flows only through that winning outcome.
+        """
+        t_enc = t                      # (B, 1) already in [0, 1]
+        c_enc = torch.sigmoid(c)       # (B, 1) z-scored → (0, 1)
+        inp   = torch.cat([z_t, t_enc, c_enc], dim=-1)    # (B, D+2)
+        probs = self.vqc(inp.double()).float()              # (B, 2^D)
+        log_P, _ = probs.clamp(min=1e-10).log().max(dim=-1)  # (B,)
+        return log_P
+
+    def forward(self, z_t: torch.Tensor, t: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+        """
+        Returns score = ∇_{z_t} log P_t(z_t, t, c).  Shape: (B, latent_dim).
+
+        create_graph=True during training so DSM loss can backprop through the score
+        to update circuit parameters θ and outcome_logits.
+        """
+        if t.dim() == 1:
+            t = t.unsqueeze(1)
+        if c.dim() == 1:
+            c = c.unsqueeze(1)
+
+        # Fresh leaf for grad computation (detach from diffusion forward process graph)
+        z_inp = z_t.detach().requires_grad_(True)
+        log_P = self._log_prob(z_inp, t, c)   # (B,) — θ still connected
+        score = torch.autograd.grad(
+            log_P.sum(), z_inp,
+            create_graph=self.training,        # True during training for θ update
+        )[0]                                   # (B, D)
+        return score                           # score (not ε̂); caller applies DSM loss

@@ -9,7 +9,7 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.models.diffusion import ConditionalDenoisingMLP, DenoisingMLP, NoiseScheduler
-from src.models.vqc_diffusion import AngleVQCDenoiser, HybridUNetDenoiser, QubitCondVQCDenoiser
+from src.models.vqc_diffusion import AngleVQCDenoiser, BornRuleVQCDenoiser, HybridUNetDenoiser, QubitCondVQCDenoiser
 from src.models.vqc_module import VQCConditionalDenoiser
 
 
@@ -265,6 +265,12 @@ def train_diffusion_cfg(
             n_layers=int(n_layers),
             num_blocks=int(num_blocks),
         ).to(device_t)
+    elif denoiser_type == "vqc_born_rule":
+        denoiser = BornRuleVQCDenoiser(
+            latent_dim=latent_dim,
+            n_layers=int(n_layers),
+            num_blocks=int(num_blocks),
+        ).to(device_t)
     elif denoiser_type in ("unet", "unet_vqc"):
         denoiser = HybridUNetDenoiser(
             latent_dim=latent_dim,
@@ -327,9 +333,17 @@ def train_diffusion_cfg(
             t_norm = (t_idx.float().unsqueeze(1) + 1.0) / float(T)
 
             z_t, eps = scheduler.add_noise(z0_batch, t_idx)
-            eps_pred = denoiser(z_t, t_norm, c_input)
 
-            loss = F.mse_loss(eps_pred, eps)
+            if getattr(denoiser, "prediction_type", "eps") == "score":
+                # DSM loss: E[||score + ε/σ_t||²]
+                alpha_bar = scheduler.alpha_bars[t_idx].to(device_t).view(-1, 1)
+                sigma_t = torch.sqrt(1.0 - alpha_bar)
+                score_pred = denoiser(z_t, t_norm, c_input)
+                loss = ((score_pred + eps / sigma_t) ** 2).mean()
+            else:
+                eps_pred = denoiser(z_t, t_norm, c_input)
+                loss = F.mse_loss(eps_pred, eps)
+
             opt.zero_grad(set_to_none=True)
             loss.backward()
 
@@ -360,16 +374,25 @@ def train_diffusion_cfg(
             denoiser.eval()
             val_epoch_loss = 0.0
             val_batches = 0
-            with torch.no_grad():
-                for z0_batch, c_batch in val_loader:
-                    z0_batch = z0_batch.to(device_t)
-                    c_batch = c_batch.to(device_t).unsqueeze(1)
-                    t_idx = torch.randint(0, int(T), (z0_batch.size(0),), device=device_t)
-                    t_norm = (t_idx.float().unsqueeze(1) + 1.0) / float(T)
-                    z_t, eps = scheduler.add_noise(z0_batch, t_idx)
-                    eps_pred = denoiser(z_t, t_norm, c_batch)
+            _score_based = getattr(denoiser, "prediction_type", "eps") == "score"
+            for z0_batch, c_batch in val_loader:
+                z0_batch = z0_batch.to(device_t)
+                c_batch = c_batch.to(device_t).unsqueeze(1)
+                t_idx = torch.randint(0, int(T), (z0_batch.size(0),), device=device_t)
+                t_norm = (t_idx.float().unsqueeze(1) + 1.0) / float(T)
+                z_t, eps = scheduler.add_noise(z0_batch, t_idx)
+                if _score_based:
+                    # autograd.grad needs grad enabled; detach score for no param update
+                    with torch.enable_grad():
+                        score_pred = denoiser(z_t, t_norm, c_batch)
+                    alpha_bar = scheduler.alpha_bars[t_idx].to(device_t).view(-1, 1)
+                    sigma_t = torch.sqrt(1.0 - alpha_bar)
+                    val_epoch_loss += ((score_pred.detach() + eps / sigma_t) ** 2).mean().item()
+                else:
+                    with torch.no_grad():
+                        eps_pred = denoiser(z_t, t_norm, c_batch)
                     val_epoch_loss += F.mse_loss(eps_pred, eps).item()
-                    val_batches += 1
+                val_batches += 1
             val_loss = val_epoch_loss / max(val_batches, 1)
             denoiser.train()
 
@@ -545,12 +568,27 @@ def sample_cfg(
     def _denorm(z: torch.Tensor) -> np.ndarray:
         return (z * z_std.unsqueeze(0) + z_mean.unsqueeze(0)).detach().cpu().numpy()
 
+    _score_based = getattr(denoiser, "prediction_type", "eps") == "score"
+
+    def _get_eps(z, t_norm, c):
+        """Get eps from denoiser, converting score → eps for Born rule models."""
+        if _score_based:
+            with torch.enable_grad():
+                score = denoiser(z, t_norm, c)
+            t_idx = (t_norm[:, 0] * float(T) - 1).long().clamp(0, int(T) - 1)
+            alpha_bar = scheduler.alpha_bars[t_idx].to(device_t).unsqueeze(1)
+            sigma_t = torch.sqrt(1.0 - alpha_bar)
+            return (-score * sigma_t).detach()
+        else:
+            with torch.no_grad():
+                return denoiser(z, t_norm, c)
+
     with torch.no_grad():
         for t_int in range(int(T), 0, -1):
             t_norm = torch.full((z_t.size(0), 1), float(t_int) / float(T), device=device_t)
 
-            eps_cond = denoiser(z_t, t_norm, c_cond)
-            eps_uncond = denoiser(z_t, t_norm, c_null)
+            eps_cond   = _get_eps(z_t, t_norm, c_cond)
+            eps_uncond = _get_eps(z_t, t_norm, c_null)
 
             # CFG interpolation
             eps_guided = eps_uncond + guidance_scale * (eps_cond - eps_uncond)
