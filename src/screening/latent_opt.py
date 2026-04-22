@@ -335,11 +335,11 @@ def train_diffusion_cfg(
             z_t, eps = scheduler.add_noise(z0_batch, t_idx)
 
             if getattr(denoiser, "prediction_type", "eps") == "score":
-                # DSM loss: E[||score + ε/σ_t||²]
+                # DSM loss: E[||σ_t·score + ε||²]  (σ_t² weighted, stable scale)
                 alpha_bar = scheduler.alpha_bars[t_idx].to(device_t).view(-1, 1)
                 sigma_t = torch.sqrt(1.0 - alpha_bar)
                 score_pred = denoiser(z_t, t_norm, c_input)
-                loss = ((score_pred + eps / sigma_t) ** 2).mean()
+                loss = ((sigma_t * score_pred + eps) ** 2).mean()
             else:
                 eps_pred = denoiser(z_t, t_norm, c_input)
                 loss = F.mse_loss(eps_pred, eps)
@@ -387,7 +387,7 @@ def train_diffusion_cfg(
                         score_pred = denoiser(z_t, t_norm, c_batch)
                     alpha_bar = scheduler.alpha_bars[t_idx].to(device_t).view(-1, 1)
                     sigma_t = torch.sqrt(1.0 - alpha_bar)
-                    val_epoch_loss += ((score_pred.detach() + eps / sigma_t) ** 2).mean().item()
+                    val_epoch_loss += ((sigma_t * score_pred.detach() + eps) ** 2).mean().item()
                 else:
                     with torch.no_grad():
                         eps_pred = denoiser(z_t, t_norm, c_batch)
