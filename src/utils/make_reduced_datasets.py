@@ -1,20 +1,20 @@
 """
-Split a cleaned CSV into stratified reduced subsets for learning curve experiments.
+Split a cleaned CSV into non-overlapping stratified subsets (k-fold style).
 
-For fraction p, creates n = round(1/p) independent subsets saved as CSV files.
-Each subset contains p fraction of the data, stratified by pIC50.
+For fraction p, creates k = round(1/p) non-overlapping subsets.
+Data is shuffled once, then partitioned bin-by-bin so each subset
+gets an equal share of each pIC50 quantile. Subsets together cover
+the full dataset with no duplicates.
 
 Output structure:
     data/BACE1/reduced/
         frac_0.20/
-            subset_0.csv
+            subset_0.csv  (~20% of data, no overlap with others)
             subset_1.csv
             ...  (5 total)
-        frac_0.10/
-            ...  (10 total)
 
 Usage:
-    python scripts/make_reduced_datasets.py \\
+    python -m src.utils.make_reduced_datasets \\
         --csv data/BACE1/bace1_clean_pic50.csv \\
         --frac 0.2 \\
         [--out_dir data/BACE1/reduced] [--n_bins 4] [--seed 0]
@@ -27,37 +27,40 @@ import numpy as np
 import pandas as pd
 
 
-def stratified_sample(
+def stratified_kfold_split(
     df: pd.DataFrame,
     pIC50_col: str,
-    frac: float,
+    k: int,
     n_bins: int,
     seed: int,
-) -> pd.DataFrame:
+) -> list[pd.DataFrame]:
     rng = np.random.default_rng(seed)
     bins = pd.qcut(df[pIC50_col], q=n_bins, labels=False, duplicates="drop")
-    sampled_idx = []
+
+    fold_indices: list[list] = [[] for _ in range(k)]
     for b in np.unique(bins):
         group = df.index[bins == b].tolist()
-        k = max(1, round(len(group) * frac))
-        chosen = rng.choice(group, size=min(k, len(group)), replace=False)
-        sampled_idx.extend(chosen.tolist())
-    return df.loc[sorted(sampled_idx)].reset_index(drop=True)
+        rng.shuffle(group)
+        for i, idx in enumerate(group):
+            fold_indices[i % k].append(idx)
+
+    return [df.loc[sorted(idxs)].reset_index(drop=True) for idxs in fold_indices]
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--csv", required=True, help="Input CSV (e.g. data/BACE1/bace1_clean_pic50.csv)")
+    parser.add_argument("--csv", required=True,
+                        help="Input CSV (e.g. data/BACE1/bace1_clean_pic50.csv)")
     parser.add_argument("--frac", type=float, required=True,
-                        help="Fraction to keep per subset (e.g. 0.2 → 5 subsets)")
+                        help="Fraction per subset (e.g. 0.2 → 5 non-overlapping subsets)")
     parser.add_argument("--out_dir", default=None,
-                        help="Output directory (default: same folder as input CSV / reduced)")
+                        help="Output directory (default: <csv parent>/reduced)")
     parser.add_argument("--n_bins", type=int, default=4,
                         help="pIC50 quantile bins for stratification (default: 4)")
     parser.add_argument("--seed", type=int, default=0,
-                        help="Base seed; subset_i uses seed+i (default: 0)")
+                        help="Shuffle seed (default: 0)")
     parser.add_argument("--pIC50_col", default="pIC50",
-                        help="Column name for pIC50 values (default: pIC50)")
+                        help="pIC50 column name (default: pIC50)")
     args = parser.parse_args()
 
     if not (0 < args.frac < 1):
@@ -67,21 +70,23 @@ def main():
     df = pd.read_csv(csv_path)
     print(f"Loaded {len(df)} rows from {csv_path}")
 
+    k = round(1.0 / args.frac)
     out_dir = Path(args.out_dir) if args.out_dir else csv_path.parent / "reduced"
     frac_dir = out_dir / f"frac_{args.frac:.2f}"
     frac_dir.mkdir(parents=True, exist_ok=True)
 
-    n_subsets = round(1.0 / args.frac)
-    print(f"Fraction {args.frac} → {n_subsets} subsets (~{round(len(df) * args.frac)} rows each)")
+    print(f"Fraction {args.frac} → {k} non-overlapping subsets (~{len(df)//k} rows each)")
     print(f"Output: {frac_dir}\n")
 
-    for i in range(n_subsets):
-        subset = stratified_sample(df, args.pIC50_col, args.frac, args.n_bins, seed=args.seed + i)
+    subsets = stratified_kfold_split(df, args.pIC50_col, k, args.n_bins, args.seed)
+    for i, subset in enumerate(subsets):
         out_path = frac_dir / f"subset_{i}.csv"
         subset.to_csv(out_path, index=False)
-        print(f"  subset_{i}.csv: {len(subset)} rows  (seed={args.seed + i})")
+        print(f"  subset_{i}.csv: {len(subset)} rows")
 
-    print(f"\nDone. Point raw_csv in config to e.g. {frac_dir}/subset_0.csv")
+    total = sum(len(s) for s in subsets)
+    print(f"\nTotal rows across subsets: {total} (original: {len(df)})")
+    print(f"Done. Point raw_csv in config to e.g. {frac_dir}/subset_0.csv")
 
 
 if __name__ == "__main__":
