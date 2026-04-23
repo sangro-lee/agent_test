@@ -198,6 +198,8 @@ def main():
         elif denoiser_type == "vqc_born_rule":
             ckpt["n_layers"]   = denoiser.n_layers
             ckpt["num_blocks"] = denoiser.num_blocks
+            ckpt["time_dim"]   = time_dim
+            ckpt["cond_dim"]   = cond_dim
         elif denoiser_type in ("unet", "unet_vqc"):
             ckpt["unet_dims"] = denoiser.unet_dims
             ckpt["n_layers"] = denoiser.n_layers
