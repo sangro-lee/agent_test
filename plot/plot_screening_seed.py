@@ -145,7 +145,7 @@ def main():
     parser.add_argument("--out",        type=str, default=None,
                         help="Output PNG for combined plot (default: <csv_dir>/seed_sweep.png)")
     parser.add_argument("--metric",     nargs="+",
-                        default=["mean_actual", "hit_rate", "n"],
+                        default=["mean_actual", "hit_rate", "n", "mean_sim"],
                         help="Columns to plot (default: mean_actual hit_rate n)")
     parser.add_argument("--per_method", action="store_true",
                         help="Also generate one PNG per base model showing individual seeds")
