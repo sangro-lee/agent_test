@@ -35,15 +35,18 @@ def compare_splits(dir_a: str | Path, dir_b: str | Path) -> bool:
         a = np.load(path_a)
         b = np.load(path_b)
 
-        if a.shape != b.shape:
-            print(f"  {name}: SHAPE MISMATCH  A={a.shape}  B={b.shape}")
-            all_match = False
-        elif np.array_equal(a, b):
+        set_a, set_b = set(a.tolist()), set(b.tolist())
+        only_a = len(set_a - set_b)
+        only_b = len(set_b - set_a)
+        common = len(set_a & set_b)
+
+        if set_a == set_b:
             print(f"  {name}: IDENTICAL  (n={len(a)})")
         else:
-            diff = np.sum(a != b)
-            print(f"  {name}: DIFFER  {diff}/{len(a)} indices differ")
             all_match = False
+            print(f"  {name}: DIFFER  "
+                  f"common={common}  only_A={only_a}  only_B={only_b}  "
+                  f"|A|={len(a)}  |B|={len(b)}")
 
     print()
     if all_match:
