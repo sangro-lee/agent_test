@@ -35,6 +35,9 @@ from src.features.fingerprints import smiles_to_fp
 from src.features.graph import MolDataset, SMEMolDataset, SME_NODE_DIM
 from src.models.gnn import AttentiveFPModel, SMERGCNModel
 from src.models.mlp import FingerprintMLP
+from scipy.stats import pearsonr
+from src.evaluation.metrics import compute_metrics
+from src.evaluation.plots import plot_scatter
 from src.utils.config import parse_config_args
 from src.utils.io import load_checkpoint, resolve_run_dir
 
@@ -58,19 +61,20 @@ def _extra_args(parser: argparse.ArgumentParser) -> None:
 
 
 @torch.no_grad()
-def _encode(model, loader, device: torch.device, is_graph: bool) -> np.ndarray:
+def _encode(model, loader, device: torch.device, is_graph: bool):
     model.eval()
-    zs = []
+    zs, preds = [], []
     for batch in loader:
         if is_graph:
             batch = batch.to(device)
-            _, z = model(batch)
+            pred, z = model(batch)
         else:
             x, = batch  # no label
             x = x.to(device)
-            _, z = model(x)
+            pred, z = model(x)
         zs.append(z.detach().cpu().numpy())
-    return np.concatenate(zs, axis=0)
+        preds.append(pred.detach().cpu().numpy())
+    return np.concatenate(zs, axis=0), np.concatenate(preds, axis=0)
 
 
 def main() -> None:
@@ -176,20 +180,33 @@ def main() -> None:
     load_checkpoint(run_dir / "checkpoints" / "best.pt", model=model, map_location=device_str)
 
     # Encode
-    latents = _encode(model, loader, device, is_graph)
+    latents, preds = _encode(model, loader, device, is_graph)
 
     # Save
     np.save(out_dir / "latents_screening.npy", latents)
     np.save(out_dir / "smiles_screening.npy", np.array(smiles_list, dtype=object))
+    np.save(out_dir / "preds_screening.npy", preds)
 
     print(f"[encode_screening] latents shape: {latents.shape}")
     print(f"[encode_screening] saved → {out_dir}/latents_screening.npy")
     print(f"[encode_screening] saved → {out_dir}/smiles_screening.npy")
+    print(f"[encode_screening] saved → {out_dir}/preds_screening.npy")
 
     if args.pic50_col in scr_df.columns:
         y_scr = scr_df[args.pic50_col].values.astype(np.float32)
         np.save(out_dir / "y_screening.npy", y_scr)
         print(f"[encode_screening] saved → {out_dir}/y_screening.npy")
+
+        valid = np.isfinite(y_scr) & np.isfinite(preds)
+        y_v, p_v = y_scr[valid], preds[valid]
+        r, _ = pearsonr(y_v, p_v)
+        metrics = compute_metrics(y_v, p_v)
+        metrics["pearson_r"] = float(r)
+        print(f"[encode_screening] screening metrics: {metrics}")
+
+        plot_scatter(y_v, p_v, "Screening — True vs Pred",
+                     out_dir / "scatter_screening.png")
+        print(f"[encode_screening] saved → {out_dir}/scatter_screening.png")
     else:
         print(f"[encode_screening] '{args.pic50_col}' column not found — y_screening.npy not saved")
 
