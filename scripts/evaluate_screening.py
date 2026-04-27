@@ -156,13 +156,15 @@ def main():
     parser.add_argument("--runs_dir",  default=str(ROOT / "outputs" / "runs"))
     parser.add_argument("--threshold", type=float, default=7.0,
                         help="pIC50 threshold for hit_rate (default: 7.0)")
+    parser.add_argument("--pool", type=str, nargs="+", default=["test"],
+                        help="Pool name(s) to evaluate: test, train, val, screening, or custom. "
+                             "Multiple pools are merged into one table. (default: test)")
     parser.add_argument("--retrieval_metric", type=str, default=None,
                         choices=["cosine", "euclidean"],
-                        help="Retrieval metric used during sampling; sets default --csv to "
-                             "top_candidates_test_{metric}.csv")
+                        help="Retrieval metric used during sampling")
     parser.add_argument("--csv",       default=None,
-                        help="CSV filename to look for (default: top_candidates_test_{retrieval_metric}.csv "
-                             "or top_candidates_test.csv)")
+                        help="CSV filename to look for (overrides --pool / --retrieval_metric); "
+                             "applied to all pools if used with --pool")
     parser.add_argument("--out",       default=str(ROOT / "outputs" / "screening_comparison.png"))
     parser.add_argument("--umap",      action="store_true",
                         help="Generate UMAP plots per experiment (requires umap-learn)")
@@ -172,24 +174,29 @@ def main():
                         help="UMAP min_dist (default: 0.1)")
     args = parser.parse_args()
 
-    if args.csv is None:
+    def _csv_name(pool: str) -> str:
+        if args.csv is not None:
+            return args.csv
         if args.retrieval_metric:
-            args.csv = f"top_candidates_test_{args.retrieval_metric}.csv"
-        else:
-            args.csv = "top_candidates_test.csv"
-
-    pattern = f"*/diffusion/**/{args.csv}"
-    csvs = sorted(Path(args.runs_dir).glob(pattern))
-    if not csvs:
-        print(f"No {args.csv} found under {args.runs_dir}")
-        sys.exit(1)
+            return f"top_candidates_{pool}_{args.retrieval_metric}.csv"
+        return f"top_candidates_{pool}.csv"
 
     rows = []
-    for csv_path in csvs:
-        df = pd.read_csv(csv_path)
-        m = compute_metrics(df, args.threshold)
-        m["exp"]     = _exp_name(csv_path)
-        m["run_tag"] = _run_tag(csv_path)
+    found_any = False
+    for pool in args.pool:
+        csv_name = _csv_name(pool)
+        pattern  = f"*/diffusion/**/{csv_name}"
+        csvs = sorted(Path(args.runs_dir).glob(pattern))
+        if not csvs:
+            print(f"[skip] No {csv_name} found under {args.runs_dir}")
+            continue
+        found_any = True
+        for csv_path in csvs:
+            df = pd.read_csv(csv_path)
+            m = compute_metrics(df, args.threshold)
+            m["exp"]     = _exp_name(csv_path)
+            m["pool"]    = pool
+            m["run_tag"] = _run_tag(csv_path)
         m["path"]    = str(csv_path)
         _div_path = csv_path.parent / "diversity.json"
         if _div_path.exists():
@@ -202,18 +209,23 @@ def main():
             m["div_ratio"]  = None
         rows.append(m)
 
+    if not found_any:
+        print("No CSV files found for any of the specified pools.")
+        sys.exit(1)
+
     result = pd.DataFrame(rows).sort_values("mean_actual", ascending=False)
+    pool_label = "+".join(args.pool)
 
     # ── Print table ────────────────────────────────────────────────────────
-    print(f"\n{'Experiment/Run':<45} {'n':>4}  {'mean_actual':>11}  {'max_actual':>10}  "
+    print(f"\n{'Experiment/Run':<45} {'pool':<10} {'n':>4}  {'mean_actual':>11}  {'max_actual':>10}  "
           f"{'hit_rate':>8}  {'mean_pred':>9}  {'mean_sim':>8}  {'topk_div':>8}  {'all_div':>7}")
-    print("-" * 126)
+    print("-" * 138)
     for _, r in result.iterrows():
         tag = r['run_tag'].replace('\n', '/')
         topk_str = f"{r['topk_ratio']:>8.3f}" if pd.notna(r.get('topk_ratio')) else f"{'N/A':>8}"
         div_str  = f"{r['div_ratio']:>7.3f}"  if pd.notna(r.get('div_ratio'))  else f"{'N/A':>7}"
         sim_str  = f"{r['mean_sim']:>8.4f}"   if pd.notna(r.get('mean_sim'))   else f"{'N/A':>8}"
-        print(f"{tag:<45} {int(r['n']) if not math.isnan(r['n']) else 0:>4}  "
+        print(f"{tag:<45} {r['pool']:<10} {int(r['n']) if not math.isnan(r['n']) else 0:>4}  "
               f"{r['mean_actual']:>11.4f}  {r['max_actual']:>10.4f}  "
               f"{r['hit_rate']:>8.2%}  {r['mean_pred']:>9.4f}  {sim_str}  {topk_str}  {div_str}")
 
@@ -253,7 +265,7 @@ def main():
     ax.set_xticks(x); ax.set_xticklabels(labels, rotation=30, ha="right", fontsize=7)
     ax.set_ylabel("mean pred_pIC50"); ax.set_title("Model Confidence"); ax.grid(True, alpha=0.3)
 
-    fig.suptitle(f"Screening Evaluation — test set (threshold={args.threshold})", fontsize=10)
+    fig.suptitle(f"Screening Evaluation — {pool_label} (threshold={args.threshold})", fontsize=10)
     fig.tight_layout()
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(args.out, dpi=150, bbox_inches="tight")

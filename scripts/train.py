@@ -125,6 +125,19 @@ def main():
     label_col = data_cfg.get("label_col", "pIC50")
     y_all = df[label_col].astype(float).values
 
+    normalize_y = bool(tr_cfg.get("normalize_y", False))
+    if normalize_y:
+        y_mean = float(y_all[train_idx].mean())
+        y_std  = float(y_all[train_idx].std())
+        if y_std < 1e-8:
+            y_std = 1.0
+        y_all_norm = (y_all - y_mean) / y_std
+        save_json(run_dir / "y_scaler.json", {"mean": y_mean, "std": y_std})
+        print(f"[normalize_y] mean={y_mean:.4f} std={y_std:.4f}")
+    else:
+        y_all_norm = y_all
+        y_mean, y_std = 0.0, 1.0
+
     feature_type = str(feat_cfg.get("type", "fingerprint")).lower()
     model_type = str(model_cfg.get("type", "mlp")).lower()
     batch_size = int(tr_cfg.get("batch_size", 64))
@@ -136,7 +149,7 @@ def main():
 
         def make_loader(indices, shuffle=False):
             x = torch.tensor(x_all[indices], dtype=torch.float32)
-            y = torch.tensor(y_all[indices], dtype=torch.float32)
+            y = torch.tensor(y_all_norm[indices], dtype=torch.float32)
             return DataLoader(TensorDataset(x, y), batch_size=batch_size, shuffle=shuffle)
 
         train_loader = make_loader(train_idx, shuffle=True)
@@ -169,7 +182,7 @@ def main():
 
         def make_g_loader(indices, shuffle=False):
             smiles = [smiles_all[i] for i in indices]
-            y = [float(y_all[i]) for i in indices]
+            y = [float(y_all_norm[i]) for i in indices]
             ds = MolDataset(smiles, y)
             return PyGDataLoader(ds, batch_size=batch_size, shuffle=shuffle)
 
@@ -202,7 +215,7 @@ def main():
 
         def make_sme_loader(indices, shuffle=False):
             smiles = [smiles_all[i] for i in indices]
-            y = [float(y_all[i]) for i in indices]
+            y = [float(y_all_norm[i]) for i in indices]
             ds = SMEMolDataset(smiles, y, smask_type=smask_type, use_chirality=use_chirality)
             return PyGDataLoader(ds, batch_size=batch_size, shuffle=shuffle)
 
@@ -287,11 +300,15 @@ def main():
         y_true, y_pred, z = predict(model, loader, device=device, is_graph=is_graph)
         split_smiles = [smiles_all[i] for i in idx_arr]
 
+        # inverse-transform to original scale for interpretable CSV
+        y_true_orig = y_true * y_std + y_mean
+        y_pred_orig = y_pred * y_std + y_mean
+
         pred_df = pd.DataFrame(
             {
                 "smiles": split_smiles,
-                "y_true": y_true,
-                "y_pred": y_pred,
+                "y_true": y_true_orig,
+                "y_pred": y_pred_orig,
             }
         )
         save_predictions_csv(outputs_dir / f"{split}_preds.csv", pred_df)
