@@ -76,7 +76,8 @@ def main():
     cleaned.to_csv(run_dir / "cleaned_dataset.csv", index=False)
     save_numpy(run_dir / "splits" / "train_idx.npy", train_idx)
     save_numpy(run_dir / "splits" / "val_idx.npy", val_idx)
-    save_numpy(run_dir / "splits" / "test_idx.npy", test_idx)
+    if len(test_idx) > 0:
+        save_numpy(run_dir / "splits" / "test_idx.npy", test_idx)
     save_config(cfg, str(run_dir / "config_resolved.yaml"))
 
     print(f"[save] run_dir: {run_dir}")
