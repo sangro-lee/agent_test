@@ -197,17 +197,17 @@ def main():
             m["exp"]     = _exp_name(csv_path)
             m["pool"]    = pool
             m["run_tag"] = _run_tag(csv_path)
-        m["path"]    = str(csv_path)
-        _div_path = csv_path.parent / "diversity.json"
-        if _div_path.exists():
-            with open(_div_path) as _f:
-                _div = json.load(_f)
-            m["topk_ratio"] = _div.get("topk_ratio")   # top-k selected latents
-            m["div_ratio"]  = _div.get("ratio")         # all samples (reference)
-        else:
-            m["topk_ratio"] = None
-            m["div_ratio"]  = None
-        rows.append(m)
+            m["path"]    = str(csv_path)
+            _div_path = csv_path.parent / "diversity.json"
+            if _div_path.exists():
+                with open(_div_path) as _f:
+                    _div = json.load(_f)
+                m["topk_ratio"] = _div.get("topk_ratio")
+                m["div_ratio"]  = _div.get("ratio")
+            else:
+                m["topk_ratio"] = None
+                m["div_ratio"]  = None
+            rows.append(m)
 
     if not found_any:
         print("No CSV files found for any of the specified pools.")
