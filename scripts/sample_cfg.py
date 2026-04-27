@@ -55,6 +55,8 @@ def _extra_args(parser):
                         help="Path to .npy file of external screening latents")
     parser.add_argument("--screening_smiles",  type=str, default=None,
                         help="Path to .npy file of external screening SMILES (object array)")
+    parser.add_argument("--screening_pic50",   type=str, default=None,
+                        help="Path to .npy file of external screening pIC50 values (from encode_screening.py)")
     parser.add_argument("--retrieval_mode", type=str, default="diverse",
                         choices=["diverse", "nearest1"],
                         help="diverse: best-pred-first, up to 5 neighbors/latent until top_k unique. "
@@ -202,12 +204,17 @@ def main():
         z_fallback = load_numpy(run_dir / "latents_train.npy").astype(np.float32)
         retrieval_pools["train"] = (z_fallback, smiles_train, {})
 
-    # Optional: external screening pool (no actual pIC50 available)
+    # Optional: external screening pool
     if args.screening_latents and args.screening_smiles:
         z_scr = np.load(args.screening_latents).astype(np.float32)
         s_scr = list(np.load(args.screening_smiles, allow_pickle=True).astype(str))
-        retrieval_pools["screening"] = (z_scr, s_scr, {})
-        print(f"[sample_cfg] Loaded screening pool: {len(s_scr)} molecules")
+        y_lookup_scr = {}
+        if args.screening_pic50:
+            y_scr = np.load(args.screening_pic50).astype(np.float32)
+            y_lookup_scr = dict(zip(s_scr, y_scr.tolist()))
+        retrieval_pools["screening"] = (z_scr, s_scr, y_lookup_scr)
+        print(f"[sample_cfg] Loaded screening pool: {len(s_scr)} molecules"
+              + (f"  (pIC50 loaded)" if y_lookup_scr else "  (no pIC50)"))
 
     # ---- Determine target pIC50 -------------------------------------------
     target_pic50 = args.target_pic50

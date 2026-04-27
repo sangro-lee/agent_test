@@ -49,6 +49,9 @@ def _extra_args(parser: argparse.ArgumentParser) -> None:
                         help="Path to CSV file with external SMILES to encode")
     parser.add_argument("--smiles_col", type=str, default=None,
                         help="Column name for SMILES (default: same as config data.smiles_col)")
+    parser.add_argument("--pic50_col", type=str, default="pIC50",
+                        help="Column name for pIC50 values (default: pIC50). "
+                             "If found, saves y_screening.npy for use in sample_cfg.py")
     parser.add_argument("--out_dir", type=str, default=None,
                         help="Output directory (default: <run_dir>/screening)")
     parser.add_argument("--batch_size", type=int, default=64)
@@ -182,9 +185,18 @@ def main() -> None:
     print(f"[encode_screening] latents shape: {latents.shape}")
     print(f"[encode_screening] saved → {out_dir}/latents_screening.npy")
     print(f"[encode_screening] saved → {out_dir}/smiles_screening.npy")
+
+    if args.pic50_col in scr_df.columns:
+        y_scr = scr_df[args.pic50_col].values.astype(np.float32)
+        np.save(out_dir / "y_screening.npy", y_scr)
+        print(f"[encode_screening] saved → {out_dir}/y_screening.npy")
+    else:
+        print(f"[encode_screening] '{args.pic50_col}' column not found — y_screening.npy not saved")
+
     print(f"\nTo use in sample_cfg.py, add:")
     print(f"  --screening_latents {out_dir}/latents_screening.npy \\")
-    print(f"  --screening_smiles  {out_dir}/smiles_screening.npy")
+    print(f"  --screening_smiles  {out_dir}/smiles_screening.npy \\")
+    print(f"  --screening_pic50   {out_dir}/y_screening.npy")
 
 
 if __name__ == "__main__":
