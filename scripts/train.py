@@ -116,12 +116,14 @@ def main():
     run_dir = resolve_run_dir(cfg, create_if_missing=False)
     df = pd.read_csv(run_dir / "cleaned_dataset.csv")
     train_idx = load_numpy(run_dir / "splits" / "train_idx.npy")
-    val_idx = load_numpy(run_dir / "splits" / "val_idx.npy")
-    test_idx = load_numpy(run_dir / "splits" / "test_idx.npy")
+    val_idx   = load_numpy(run_dir / "splits" / "val_idx.npy")
+    _test_path = run_dir / "splits" / "test_idx.npy"
+    test_idx  = load_numpy(_test_path) if _test_path.exists() else None
 
     smiles_col = data_cfg["smiles_col"]
     smiles_all = df[smiles_col].astype(str).tolist()
-    y_all = df["pIC50"].astype(float).values
+    label_col = data_cfg.get("label_col", "pIC50")
+    y_all = df[label_col].astype(float).values
 
     feature_type = str(feat_cfg.get("type", "fingerprint")).lower()
     model_type = str(model_cfg.get("type", "mlp")).lower()
@@ -141,8 +143,8 @@ def main():
         val_loader = make_loader(val_idx, shuffle=False)
 
         pred_train_loader = make_loader(train_idx, shuffle=False)
-        pred_val_loader = make_loader(val_idx, shuffle=False)
-        pred_test_loader = make_loader(test_idx, shuffle=False)
+        pred_val_loader   = make_loader(val_idx,   shuffle=False)
+        pred_test_loader  = make_loader(test_idx,  shuffle=False) if test_idx is not None else None
 
         if model_type != "mlp":
             raise ValueError("For fingerprint features, model.type must be 'mlp'.")
@@ -175,8 +177,8 @@ def main():
         val_loader = make_g_loader(val_idx, shuffle=False)
 
         pred_train_loader = make_g_loader(train_idx, shuffle=False)
-        pred_val_loader = make_g_loader(val_idx, shuffle=False)
-        pred_test_loader = make_g_loader(test_idx, shuffle=False)
+        pred_val_loader   = make_g_loader(val_idx,   shuffle=False)
+        pred_test_loader  = make_g_loader(test_idx,  shuffle=False) if test_idx is not None else None
 
         # VQC mode: gnn_hidden = VQC input dim; non-VQC: gnn_hidden = latent_dim
         gnn_hidden = int(model_cfg.get("gnn_hidden", 256)) if use_vqc else latent_dim
@@ -208,8 +210,8 @@ def main():
         val_loader = make_sme_loader(val_idx, shuffle=False)
 
         pred_train_loader = make_sme_loader(train_idx, shuffle=False)
-        pred_val_loader = make_sme_loader(val_idx, shuffle=False)
-        pred_test_loader = make_sme_loader(test_idx, shuffle=False)
+        pred_val_loader   = make_sme_loader(val_idx,   shuffle=False)
+        pred_test_loader  = make_sme_loader(test_idx,  shuffle=False) if test_idx is not None else None
 
         _ffn_dims_cfg = model_cfg.get("sme_ffn_dims")
         if _ffn_dims_cfg is not None:
@@ -276,9 +278,10 @@ def main():
 
     split_map = {
         "train": (train_idx, pred_train_loader),
-        "val": (val_idx, pred_val_loader),
-        "test": (test_idx, pred_test_loader),
+        "val":   (val_idx,   pred_val_loader),
     }
+    if test_idx is not None:
+        split_map["test"] = (test_idx, pred_test_loader)
 
     for split, (idx_arr, loader) in split_map.items():
         y_true, y_pred, z = predict(model, loader, device=device, is_graph=is_graph)
