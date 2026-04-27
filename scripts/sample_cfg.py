@@ -57,6 +57,8 @@ def _extra_args(parser):
                         help="Path to .npy file of external screening SMILES (object array)")
     parser.add_argument("--screening_pic50",   type=str, default=None,
                         help="Path to .npy file of external screening pIC50 values (from encode_screening.py)")
+    parser.add_argument("--screening_name",    type=str, default="screening",
+                        help="Pool name used in output CSV filename (default: screening → top_candidates_screening_*.csv)")
     parser.add_argument("--retrieval_mode", type=str, default="diverse",
                         choices=["diverse", "nearest1"],
                         help="diverse: best-pred-first, up to 5 neighbors/latent until top_k unique. "
@@ -212,7 +214,7 @@ def main():
         if args.screening_pic50:
             y_scr = np.load(args.screening_pic50).astype(np.float32)
             y_lookup_scr = dict(zip(s_scr, y_scr.tolist()))
-        retrieval_pools["screening"] = (z_scr, s_scr, y_lookup_scr)
+        retrieval_pools[args.screening_name] = (z_scr, s_scr, y_lookup_scr)
         print(f"[sample_cfg] Loaded screening pool: {len(s_scr)} molecules"
               + (f"  (pIC50 loaded)" if y_lookup_scr else "  (no pIC50)"))
 
