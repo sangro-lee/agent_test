@@ -94,10 +94,12 @@ def main():
     splits_dir = run_dir / "splits"
     train_idx = load_numpy(splits_dir / "train_idx.npy")
     val_idx   = load_numpy(splits_dir / "val_idx.npy")
-    test_idx  = load_numpy(splits_dir / "test_idx.npy")
+    _test_path = splits_dir / "test_idx.npy"
+    test_idx  = load_numpy(_test_path) if _test_path.exists() else None
 
     smiles_all = df[data_cfg["smiles_col"]].astype(str).tolist()
-    y_all = df["pIC50"].astype(float).values
+    label_col = data_cfg.get("label_col", "pIC50")
+    y_all = df[label_col].astype(float).values
 
     feature_type = str(feat_cfg.get("type", "fingerprint")).lower()
     model_type   = str(model_cfg.get("type", "mlp")).lower()
@@ -200,7 +202,9 @@ def main():
     eval_dir = Path(run_dir) / "evaluation"
     eval_dir.mkdir(parents=True, exist_ok=True)
 
-    splits = {"train": train_idx, "val": val_idx, "test": test_idx}
+    splits = {"train": train_idx, "val": val_idx}
+    if test_idx is not None:
+        splits["test"] = test_idx
     all_latents, all_y_true, all_split_labels = [], [], []
 
     for split_name, idx in splits.items():
