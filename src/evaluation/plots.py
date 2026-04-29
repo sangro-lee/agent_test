@@ -8,22 +8,24 @@ import seaborn as sns
 sns.set_style("whitegrid")
 
 
-def plot_scatter(y_true, y_pred, title, save_path):
+def plot_scatter(y_true, y_pred, title, save_path, label: str = "pIC50"):
     from scipy.stats import pearsonr
+    from sklearn.metrics import r2_score
 
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
 
-    r, _ = pearsonr(y_true, y_pred)
+    r, _  = pearsonr(y_true, y_pred)
+    r2    = r2_score(y_true, y_pred)
 
     fig, ax = plt.subplots(figsize=(6, 6))
     ax.scatter(y_true, y_pred, alpha=0.6, edgecolor="none")
     lo = float(min(y_true.min(), y_pred.min()))
     hi = float(max(y_true.max(), y_pred.max()))
     ax.plot([lo, hi], [lo, hi], linestyle="--", linewidth=1)
-    ax.set_xlabel("True pIC50")
-    ax.set_ylabel("Pred pIC50")
-    ax.set_title(f"{title}  (Pearson r = {r:.3f})")
+    ax.set_xlabel(f"True {label}")
+    ax.set_ylabel(f"Pred {label}")
+    ax.set_title(f"{title}  (Pearson r = {r:.3f},  R² = {r2:.3f})")
 
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)

@@ -229,6 +229,7 @@ def main():
             y_true, y_pred,
             f"{split_name.capitalize()} — True vs Pred",
             eval_dir / f"scatter_{split_name}.png",
+            label=label_col,
         )
         plot_latent_tsne(latents, y_true, eval_dir / f"tsne_{split_name}.png", split_name=split_name)
         plot_latent_umap(latents, y_true, eval_dir / f"umap_{split_name}.png", split_name=split_name)
