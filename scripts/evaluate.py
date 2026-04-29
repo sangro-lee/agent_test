@@ -101,6 +101,17 @@ def main():
     label_col = data_cfg.get("label_col", "pIC50")
     y_all = df[label_col].astype(float).values
 
+    # If encoder was trained with normalize_y, apply same normalization so that
+    # metrics and plots are computed in the same scale as model predictions.
+    _scaler_path = run_dir / "y_scaler.json"
+    if _scaler_path.exists():
+        _scaler = load_json(_scaler_path)
+        y_mean, y_std = float(_scaler["mean"]), float(_scaler["std"])
+        y_all = (y_all - y_mean) / y_std
+        print(f"[evaluate] normalize_y applied: mean={y_mean:.4f} std={y_std:.4f}")
+    else:
+        y_mean, y_std = 0.0, 1.0
+
     feature_type = str(feat_cfg.get("type", "fingerprint")).lower()
     model_type   = str(model_cfg.get("type", "mlp")).lower()
     batch_size   = int(tr_cfg.get("batch_size", 64))
