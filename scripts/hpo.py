@@ -147,9 +147,7 @@ def make_objective(base_cfg: dict, hpo_dir: Path, base_seed: int):
         model_cfg["sme_rgcn_dropout"] = dropout
         model_cfg["sme_ffn_dropout"]  = dropout
 
-        model_cfg["sme_ffn_hidden"] = trial.suggest_categorical(
-            "sme_ffn_hidden", [128, 256, 512]
-        )
+        # sme_ffn_dims / sme_ffn_hidden은 config 값 그대로 유지
 
         # hidden_feats: Optuna는 list를 직접 못 다루므로 문자열로
         hidden_feats_str = trial.suggest_categorical(
