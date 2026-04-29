@@ -104,7 +104,8 @@ def main():
     # If encoder was trained with normalize_y, apply same normalization so that
     # metrics and plots are computed in the same scale as model predictions.
     _scaler_path = run_dir / "y_scaler.json"
-    if _scaler_path.exists():
+    normalize_y = bool(tr_cfg.get("normalize_y", False))
+    if normalize_y and _scaler_path.exists():
         _scaler = load_json(_scaler_path)
         y_mean, y_std = float(_scaler["mean"]), float(_scaler["std"])
         y_all = (y_all - y_mean) / y_std
