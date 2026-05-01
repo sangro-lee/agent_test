@@ -21,6 +21,15 @@ Usage (from raw CSV directly — splits generated per trial):
 Multi-GPU (same study_name, different devices):
   CUDA_VISIBLE_DEVICES=0 python scripts/hpo_mlp.py --config ... --n_trials 25 &
   CUDA_VISIBLE_DEVICES=1 python scripts/hpo_mlp.py --config ... --n_trials 25 &
+
+Per-arch outputs (arch_dir/):
+  scatter_{r2|loss}_{val|train|test}.png
+  dataset_{r2|loss}.csv  /  {train|val|test}_idx_{r2|loss}.npy
+  y_scaler_{r2|loss}.json
+
+Global outputs (hpo_root/):
+  best_model.pt  best_y_scaler.json  best_params.json  all_results.json
+  best_dataset.csv  best_{train|val|test}.csv  best_{train|val|test}_idx.npy
 """
 import argparse
 import copy
@@ -79,6 +88,7 @@ def _undersample_indices(
     rng.shuffle(selected)
     return selected
 
+
 # Intermediate layers before the fixed latent_dim=4.
 # "" means no intermediate layer → hidden_dims = [4].
 _HIDDEN_DIMS_GRID = [
@@ -136,11 +146,11 @@ def get_splits(cfg: dict, df: pd.DataFrame, seed: int, csv_mode: bool):
     csv_mode=False → load pre-saved npy splits from run_dir.
     """
     if csv_mode:
-        tr_cfg = cfg["training"]
+        tr_cfg   = cfg["training"]
         data_cfg = cfg["data"]
         split_type = str(tr_cfg.get("split_type", "random")).lower()
-        val_frac  = float(tr_cfg.get("val_fraction", 0.2))
-        test_frac = float(tr_cfg.get("test_fraction", 0.1))
+        val_frac   = float(tr_cfg.get("val_fraction", 0.2))
+        test_frac  = float(tr_cfg.get("test_fraction", 0.1))
         if split_type == "scaffold":
             train_idx, val_idx, test_idx = scaffold_split(
                 df, smiles_col=data_cfg["smiles_col"],
@@ -153,10 +163,13 @@ def get_splits(cfg: dict, df: pd.DataFrame, seed: int, csv_mode: bool):
         return train_idx, val_idx, test_idx
     else:
         base_run_dir = resolve_run_dir(cfg, create_if_missing=False)
-        splits_dir = base_run_dir / "splits"
+        splits_dir   = base_run_dir / "splits"
+        test_path    = splits_dir / "test_idx.npy"
+        test_idx     = load_numpy(test_path) if test_path.exists() else np.array([], dtype=int)
         return (
             load_numpy(splits_dir / "train_idx.npy"),
             load_numpy(splits_dir / "val_idx.npy"),
+            test_idx,
         )
 
 
@@ -168,7 +181,8 @@ def run_trial(
     trial_dir: Path,
     trial_seed: int,
     csv_mode: bool,
-) -> float:
+) -> tuple:
+    """Train one trial; return (val_r2, val_loss) evaluated on best checkpoint."""
     tr_cfg    = cfg["training"]
     model_cfg = cfg["model"]
 
@@ -222,7 +236,6 @@ def run_trial(
         checkpoint_every=0,
         run_dir=trial_dir,
     )
-
     trainer.fit(
         train_loader=train_loader,
         val_loader=val_loader,
@@ -232,16 +245,63 @@ def run_trial(
     from src.utils.io import load_checkpoint
     load_checkpoint(trial_dir / "checkpoints" / "best.pt", model=model, map_location=device)
     model.eval()
+
+    criterion_eval = nn.MSELoss()
+    val_loss_total = 0.0
+    n_val = 0
     preds, trues = [], []
     with torch.no_grad():
         for x_batch, y_batch in val_loader:
             x_batch = x_batch.to(device)
             pred, _ = model(x_batch)
+            val_loss_total += criterion_eval(pred, y_batch.to(device)).item() * len(y_batch)
+            n_val += len(y_batch)
             preds.append(pred.cpu())
             trues.append(y_batch)
-    y_pred = torch.cat(preds).numpy()
-    y_true = torch.cat(trues).numpy()
-    return float(r2_score(y_true, y_pred))
+
+    val_loss = val_loss_total / max(n_val, 1)
+    y_pred   = torch.cat(preds).numpy()
+    y_true   = torch.cat(trues).numpy()
+    return float(r2_score(y_true, y_pred)), val_loss
+
+
+def _reconstruct_trial_data(
+    trial: optuna.Trial,
+    base_cfg: dict,
+    all_x: list,
+    all_y: list,
+    all_df: list,
+    csv_mode: bool,
+    keep_neg_mid: int,
+    keep_neg: int,
+    keep_low_pos: int,
+):
+    """Reconstruct (cfg, x_sel, y_sel, df_sel, trial_seed) from trial params."""
+    cfg       = copy.deepcopy(base_cfg)
+    tr_cfg    = cfg["training"]
+    model_cfg = cfg["model"]
+
+    tr_cfg["lr"]           = trial.params["lr"]
+    tr_cfg["weight_decay"] = trial.params["weight_decay"]
+    tr_cfg["batch_size"]   = trial.params["batch_size"]
+    model_cfg["dropout"]   = trial.params["dropout"]
+
+    if csv_mode:
+        us_seed    = trial.params["us_seed"]
+        split_seed = trial.params["split_seed"]
+        us_idx  = _undersample_indices(all_y[0], seed=us_seed,
+                                       keep_neg_mid=keep_neg_mid,
+                                       keep_neg=keep_neg,
+                                       keep_low_pos=keep_low_pos)
+        x_sel   = all_x[0][us_idx]
+        y_sel   = all_y[0][us_idx]
+        df_sel  = all_df[0].iloc[us_idx].reset_index(drop=True)
+        trial_seed = split_seed
+    else:
+        x_sel, y_sel, df_sel = all_x[0], all_y[0], all_df[0]
+        trial_seed = trial.number
+
+    return cfg, x_sel, y_sel, df_sel, trial_seed
 
 
 def scatter_best_trial(
@@ -257,40 +317,36 @@ def scatter_best_trial(
     keep_neg_mid: int,
     keep_neg: int,
     keep_low_pos: int,
-    save_path: Path,
+    arch_dir: Path,
+    tag: str,
 ):
+    """Plot val/train/test scatter; save dataset, split indices, y_scaler per arch.
+
+    tag: "r2" (best by val R²) or "loss" (best by val_loss).
+    Outputs written to arch_dir:
+      scatter_{tag}_{val|train|test}.png
+      dataset_{tag}.csv  /  {train|val|test}_idx_{tag}.npy
+      y_scaler_{tag}.json
+    """
     from src.evaluation.plots import plot_scatter
     from src.utils.io import load_checkpoint
 
-    cfg       = copy.deepcopy(base_cfg)
+    cfg, x_sel, y_sel, df_sel, trial_seed = _reconstruct_trial_data(
+        trial, base_cfg, all_x, all_y, all_df, csv_mode,
+        keep_neg_mid, keep_neg, keep_low_pos,
+    )
     tr_cfg    = cfg["training"]
     model_cfg = cfg["model"]
     label_col = cfg["data"].get("label_col", "y")
 
-    tr_cfg["lr"]           = trial.params["lr"]
-    tr_cfg["weight_decay"] = trial.params["weight_decay"]
-    tr_cfg["batch_size"]   = trial.params["batch_size"]
-    model_cfg["dropout"]   = trial.params["dropout"]
     intermediate = [int(d) for d in hidden_str.split("_")] if hidden_str else []
     model_cfg["hidden_dims"] = intermediate + [4]
 
     device = resolve_device(str(tr_cfg.get("device", "auto")))
 
-    if csv_mode:
-        us_seed    = trial.params["us_seed"]
-        split_seed = trial.params["split_seed"]
-        us_idx  = _undersample_indices(all_y[0], seed=us_seed,
-                                       keep_neg_mid=keep_neg_mid,
-                                       keep_neg=keep_neg,
-                                       keep_low_pos=keep_low_pos)
-        x_sel, y_sel, df_sel = all_x[0][us_idx], all_y[0][us_idx], all_df[0].iloc[us_idx].reset_index(drop=True)
-        trial_seed = split_seed
-    else:
-        x_sel, y_sel, df_sel = all_x[0], all_y[0], all_df[0]
-        trial_seed = trial.number
-
     normalize_y = bool(tr_cfg.get("normalize_y", False))
-    train_idx, val_idx, _ = get_splits(cfg, df_sel, seed=trial_seed, csv_mode=csv_mode)
+    train_idx, val_idx, test_idx = get_splits(cfg, df_sel, seed=trial_seed, csv_mode=csv_mode)
+
     if normalize_y:
         y_mean = float(y_sel[train_idx].mean())
         y_std  = float(y_sel[train_idx].std()) or 1.0
@@ -298,12 +354,29 @@ def scatter_best_trial(
     else:
         y_norm, y_mean, y_std = y_sel, 0.0, 1.0
 
+    # ── persist scaler, dataset, indices ──────────────────────────────────
+    save_json(arch_dir / f"y_scaler_{tag}.json", {
+        "y_mean": y_mean, "y_std": y_std, "normalize_y": normalize_y,
+    })
+    df_sel.to_csv(arch_dir / f"dataset_{tag}.csv", index=False)
+    np.save(arch_dir / f"train_idx_{tag}.npy", train_idx)
+    np.save(arch_dir / f"val_idx_{tag}.npy",   val_idx)
+    np.save(arch_dir / f"test_idx_{tag}.npy",  test_idx)
+
+    # ── load model ────────────────────────────────────────────────────────
     batch_size = int(tr_cfg["batch_size"])
-    val_loader = DataLoader(
-        TensorDataset(torch.tensor(x_sel[val_idx], dtype=torch.float32),
-                      torch.tensor(y_norm[val_idx], dtype=torch.float32)),
-        batch_size=batch_size, shuffle=False,
-    )
+
+    def make_loader(idx):
+        return DataLoader(
+            TensorDataset(torch.tensor(x_sel[idx], dtype=torch.float32),
+                          torch.tensor(y_norm[idx], dtype=torch.float32)),
+            batch_size=batch_size, shuffle=False,
+        )
+
+    val_loader   = make_loader(val_idx)
+    train_loader = make_loader(train_idx)
+    has_test     = len(test_idx) > 0
+    test_loader  = make_loader(test_idx) if has_test else None
 
     model = FingerprintMLP(
         input_dim=x_sel.shape[1],
@@ -314,21 +387,38 @@ def scatter_best_trial(
     load_checkpoint(trial_dir / "checkpoints" / "best.pt", model=model, map_location=device)
     model.eval()
 
-    preds, trues = [], []
-    with torch.no_grad():
-        for x_b, y_b in val_loader:
-            pred, _ = model(x_b.to(device))
-            preds.append(pred.cpu()); trues.append(y_b)
-    y_pred = torch.cat(preds).numpy()
-    y_true = torch.cat(trues).numpy()
+    def _infer(loader):
+        preds, trues = [], []
+        with torch.no_grad():
+            for x_b, y_b in loader:
+                pred, _ = model(x_b.to(device))
+                preds.append(pred.cpu())
+                trues.append(y_b)
+        yp = torch.cat(preds).numpy()
+        yt = torch.cat(trues).numpy()
+        if normalize_y:
+            yp = yp * y_std + y_mean
+            yt = yt * y_std + y_mean
+        return yt, yp
 
-    if normalize_y:
-        y_pred = y_pred * y_std + y_mean
-        y_true = y_true * y_std + y_mean
+    # ── scatter plots ──────────────────────────────────────────────────────
+    y_true_val,   y_pred_val   = _infer(val_loader)
+    y_true_train, y_pred_train = _infer(train_loader)
 
-    plot_scatter(y_true, y_pred,
-                 title=f"Val — arch {arch_label}",
-                 save_path=save_path, label=label_col)
+    plot_scatter(y_true_val,   y_pred_val,
+                 title=f"Val [{tag}] — arch {arch_label}",
+                 save_path=arch_dir / f"scatter_{tag}_val.png",
+                 label=label_col)
+    plot_scatter(y_true_train, y_pred_train,
+                 title=f"Train [{tag}] — arch {arch_label}",
+                 save_path=arch_dir / f"scatter_{tag}_train.png",
+                 label=label_col)
+    if has_test:
+        y_true_test, y_pred_test = _infer(test_loader)
+        plot_scatter(y_true_test, y_pred_test,
+                     title=f"Test [{tag}] — arch {arch_label}",
+                     save_path=arch_dir / f"scatter_{tag}_test.png",
+                     label=label_col)
 
 
 def make_objective(
@@ -344,42 +434,37 @@ def make_objective(
     keep_low_pos: int = 50,
 ):
     def objective(trial: optuna.Trial) -> float:
-        cfg = copy.deepcopy(base_cfg)
+        cfg       = copy.deepcopy(base_cfg)
         tr_cfg    = cfg["training"]
         model_cfg = cfg["model"]
 
-        # ── Training hyperparameters ──────────────────────────────────────
         tr_cfg["lr"]           = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
         tr_cfg["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
         tr_cfg["batch_size"]   = trial.suggest_categorical("batch_size", [8, 16, 32, 64])
+        model_cfg["dropout"]   = trial.suggest_float("dropout", 0.0, 0.5)
 
-        # ── Model hyperparameters ─────────────────────────────────────────
-        model_cfg["dropout"] = trial.suggest_float("dropout", 0.0, 0.5)
-
-        # hidden_dims: fixed intermediate layers + latent_dim=4
         intermediate = [int(d) for d in hidden_str.split("_")] if hidden_str else []
         model_cfg["hidden_dims"] = intermediate + [4]
 
         if csv_mode:
-            # us_seed: controls which molecules survive undersampling (keep=50 fixed)
-            # split_seed: controls train/val split (also used as model init seed)
             us_seed    = trial.suggest_categorical("us_seed",    _SEEDS)
             split_seed = trial.suggest_categorical("split_seed", _SEEDS)
-            us_idx     = _undersample_indices(all_y[0], seed=us_seed,
-                                              keep_neg_mid=keep_neg_mid,
-                                              keep_neg=keep_neg,
-                                              keep_low_pos=keep_low_pos)
-            x_sel = all_x[0][us_idx]
-            y_sel = all_y[0][us_idx]
-            df_sel = all_df[0].iloc[us_idx].reset_index(drop=True)
+            us_idx  = _undersample_indices(all_y[0], seed=us_seed,
+                                           keep_neg_mid=keep_neg_mid,
+                                           keep_neg=keep_neg,
+                                           keep_low_pos=keep_low_pos)
+            x_sel   = all_x[0][us_idx]
+            y_sel   = all_y[0][us_idx]
+            df_sel  = all_df[0].iloc[us_idx].reset_index(drop=True)
             trial_seed = split_seed
         else:
             x_sel, y_sel, df_sel = all_x[0], all_y[0], all_df[0]
             trial_seed = trial.number
 
         trial_dir = arch_dir / f"trial_{trial.number}"
-        val_r2 = run_trial(cfg, x_sel, y_sel, df_sel, trial_dir, trial_seed, csv_mode)
-        print(f"    trial {trial.number:3d}  val_r2={val_r2:.4f}  params={trial.params}")
+        val_r2, val_loss = run_trial(cfg, x_sel, y_sel, df_sel, trial_dir, trial_seed, csv_mode)
+        trial.set_user_attr("val_loss", val_loss)
+        print(f"    trial {trial.number:3d}  val_r2={val_r2:.4f}  val_loss={val_loss:.4f}  params={trial.params}")
         return val_r2
 
     return objective
@@ -387,44 +472,46 @@ def make_objective(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config",     required=True,  type=str)
-    parser.add_argument("--csv",        default=None,   type=str,
+    parser.add_argument("--config",      required=True, type=str)
+    parser.add_argument("--csv",         default=None,  type=str,
                         help="Path to raw CSV. If given, splits are generated per trial.")
-    parser.add_argument("--label_col",    default=None,  type=str,
-                        help="Override label column name (e.g. 'Malachite green assay_50uM (%%)').")
-    parser.add_argument("--smiles_col",   default=None,  type=str,
+    parser.add_argument("--label_col",   default=None,  type=str,
+                        help="Override label column name.")
+    parser.add_argument("--smiles_col",  default=None,  type=str,
                         help="Override SMILES column name.")
-    parser.add_argument("--keep_neg_mid", default=50,    type=int,
-                        help="Max samples to keep from y in [-20, -10) (default: 50).")
-    parser.add_argument("--keep_neg",     default=50,    type=int,
-                        help="Max samples to keep from y in [-10, 0)  (default: 50).")
-    parser.add_argument("--keep_low_pos", default=50,    type=int,
-                        help="Max samples to keep from y in [0, 10)   (default: 50).")
-    parser.add_argument("--n_trials",   default=50,     type=int)
-    parser.add_argument("--study_name", default=None,   type=str)
-    parser.add_argument("--timeout",    default=None,   type=int, help="seconds")
+    parser.add_argument("--keep_neg_mid", default=50,   type=int,
+                        help="Max samples from y in [-20, -10) (default: 50).")
+    parser.add_argument("--keep_neg",     default=50,   type=int,
+                        help="Max samples from y in [-10, 0)  (default: 50).")
+    parser.add_argument("--keep_low_pos", default=50,   type=int,
+                        help="Max samples from y in [0, 10)   (default: 50).")
+    parser.add_argument("--n_trials",    default=50,    type=int)
+    parser.add_argument("--study_name",  default=None,  type=str)
+    parser.add_argument("--timeout",     default=None,  type=int, help="seconds")
     args = parser.parse_args()
 
     base_cfg = load_config(args.config)
     data_cfg = base_cfg["data"]
     feat_cfg = base_cfg["features"]
 
-    # Determine data source
-    csv_mode = args.csv is not None
+    if args.label_col:
+        data_cfg["label_col"] = args.label_col
+    if args.smiles_col:
+        data_cfg["smiles_col"] = args.smiles_col
+
+    csv_mode     = args.csv is not None
     base_run_dir = resolve_run_dir(base_cfg, create_if_missing=True)
-    hpo_root = base_run_dir / "hpo_mlp"
+    hpo_root     = base_run_dir / "hpo_mlp"
+    hpo_root.mkdir(parents=True, exist_ok=True)
 
     if csv_mode:
         df = pd.read_csv(args.csv)
     else:
         df = pd.read_csv(base_run_dir / "cleaned_dataset.csv")
 
-    hpo_root.mkdir(parents=True, exist_ok=True)
-
     label_col  = data_cfg.get("label_col", "pIC50")
     smiles_col = data_cfg["smiles_col"]
 
-    # Drop rows with missing SMILES or label
     before = len(df)
     df = df.dropna(subset=[smiles_col, label_col]).reset_index(drop=True)
     df = df[df[smiles_col].astype(str).str.strip().ne("nan")].reset_index(drop=True)
@@ -432,10 +519,8 @@ def main():
         print(f"[hpo_mlp] dropped {before - len(df)} rows with missing SMILES/label")
 
     smiles_all = df[smiles_col].astype(str).tolist()
-
-    # Extract features once for the full dataset
-    x_all = load_features(feat_cfg, smiles_all)
-    y_all = df[label_col].astype(float).values
+    x_all      = load_features(feat_cfg, smiles_all)
+    y_all      = df[label_col].astype(float).values
     print(f"[hpo_mlp] features shape: {x_all.shape}  csv_mode={csv_mode}")
 
     all_x  = [x_all]
@@ -443,7 +528,6 @@ def main():
     all_df = [df]
 
     base_study_name = args.study_name or Path(args.config).stem
-
     print(f"Results → {hpo_root}")
     print(f"Architectures: {len(_HIDDEN_DIMS_GRID)}  ×  n_trials: {args.n_trials}\n")
 
@@ -465,7 +549,8 @@ def main():
             sampler=optuna.samplers.TPESampler(seed=0),
         )
 
-        print(f"[arch {arch_label}]  hidden_dims={([int(d) for d in hidden_str.split('_')] if hidden_str else []) + [4]}")
+        hd = ([int(d) for d in hidden_str.split("_")] if hidden_str else []) + [4]
+        print(f"[arch {arch_label}]  hidden_dims={hd}")
         study.optimize(
             make_objective(base_cfg, all_x, all_y, all_df, arch_dir, hidden_str, csv_mode,
                            keep_neg_mid=args.keep_neg_mid,
@@ -475,57 +560,105 @@ def main():
             timeout=args.timeout,
         )
 
-        best = study.best_trial
-        best_trial_dir = arch_dir / f"trial_{best.number}"
-        print(f"  → best val_r2={best.value:.4f}  params={best.params}\n")
+        # ── find best by R² and best by val_loss ──────────────────────────
+        best_r2 = study.best_trial
+        completed_with_loss = [
+            t for t in study.trials
+            if t.state == optuna.trial.TrialState.COMPLETE and "val_loss" in t.user_attrs
+        ]
+        best_loss = (
+            min(completed_with_loss, key=lambda t: t.user_attrs["val_loss"])
+            if completed_with_loss else best_r2
+        )
 
-        scatter_best_trial(
-            trial=best, trial_dir=best_trial_dir,
+        best_r2_dir   = arch_dir / f"trial_{best_r2.number}"
+        best_loss_dir = arch_dir / f"trial_{best_loss.number}"
+
+        def _fmt(v):
+            return f"{v:.4f}" if v is not None else "N/A"
+
+        print(
+            f"  → best R²  : trial {best_r2.number:3d}  "
+            f"val_r2={best_r2.value:.4f}  "
+            f"val_loss={_fmt(best_r2.user_attrs.get('val_loss'))}"
+        )
+        print(
+            f"  → best loss: trial {best_loss.number:3d}  "
+            f"val_r2={best_loss.value:.4f}  "
+            f"val_loss={_fmt(best_loss.user_attrs.get('val_loss'))}\n"
+        )
+
+        common_kw = dict(
             base_cfg=base_cfg, all_x=all_x, all_y=all_y, all_df=all_df,
             hidden_str=hidden_str, arch_label=arch_label,
             csv_mode=csv_mode,
             keep_neg_mid=args.keep_neg_mid,
             keep_neg=args.keep_neg,
             keep_low_pos=args.keep_low_pos,
-            save_path=arch_dir / "scatter_best_val.png",
+            arch_dir=arch_dir,
         )
+        scatter_best_trial(trial=best_r2,   trial_dir=best_r2_dir,   tag="r2",   **common_kw)
+        scatter_best_trial(trial=best_loss, trial_dir=best_loss_dir, tag="loss", **common_kw)
 
         all_results.append({
-            "arch": arch_label, "val_r2": best.value, "params": best.params,
-            "trial_dir": str(best_trial_dir),
+            "arch": arch_label,
+            "best_r2": {
+                "val_r2":       best_r2.value,
+                "val_loss":     best_r2.user_attrs.get("val_loss"),
+                "params":       best_r2.params,
+                "trial_number": best_r2.number,
+                "trial_dir":    str(best_r2_dir),
+            },
+            "best_loss": {
+                "val_r2":       best_loss.value,
+                "val_loss":     best_loss.user_attrs.get("val_loss"),
+                "params":       best_loss.params,
+                "trial_number": best_loss.number,
+                "trial_dir":    str(best_loss_dir),
+            },
         })
 
-    all_results.sort(key=lambda r: r["val_r2"], reverse=True)
+    # ── global best (by val R²) ────────────────────────────────────────────
+    all_results.sort(key=lambda r: r["best_r2"]["val_r2"], reverse=True)
+    top    = all_results[0]
+    top_r2 = top["best_r2"]
 
-    print("=== Overall Best ===")
-    top = all_results[0]
+    print("=== Overall Best (by val R²) ===")
     print(f"  arch     : {top['arch']}")
-    print(f"  val_r2   : {top['val_r2']:.4f}")
-    for k, v in top["params"].items():
+    print(f"  val_r2   : {top_r2['val_r2']:.4f}")
+    vl = top_r2["val_loss"]
+    if vl is not None:
+        print(f"  val_loss : {vl:.4f}")
+    for k, v in top_r2["params"].items():
         print(f"  {k:20s}: {v}")
 
-    # Copy best model checkpoint to hpo_root
-    best_ckpt_src = Path(top["trial_dir"]) / "checkpoints" / "best.pt"
+    best_ckpt_src = Path(top_r2["trial_dir"]) / "checkpoints" / "best.pt"
     best_ckpt_dst = hpo_root / "best_model.pt"
     if best_ckpt_src.exists():
         shutil.copy2(best_ckpt_src, best_ckpt_dst)
-        print(f"Best model → {best_ckpt_dst}")
+        print(f"Best model  → {best_ckpt_dst}")
     else:
         print(f"[warning] best checkpoint not found: {best_ckpt_src}")
 
-    save_json(hpo_root / "best_params.json", all_results[0])
+    top_arch_dir = Path(top_r2["trial_dir"]).parent
+    scaler_src   = top_arch_dir / "y_scaler_r2.json"
+    if scaler_src.exists():
+        shutil.copy2(scaler_src, hpo_root / "best_y_scaler.json")
+        print(f"Best scaler → {hpo_root / 'best_y_scaler.json'}")
+
+    save_json(hpo_root / "best_params.json", top_r2)
     save_json(hpo_root / "all_results.json", all_results)
-    print(f"Saved → {hpo_root / 'best_params.json'}")
+    print(f"Saved       → {hpo_root / 'best_params.json'}")
 
-    if csv_mode and "us_seed" in top["params"]:
-        best_us_seed    = top["params"]["us_seed"]
-        best_split_seed = top["params"]["split_seed"]
+    if csv_mode and "us_seed" in top_r2["params"]:
+        best_us_seed    = top_r2["params"]["us_seed"]
+        best_split_seed = top_r2["params"]["split_seed"]
 
-        us_idx   = _undersample_indices(all_y[0], seed=best_us_seed,
-                                         keep_neg_mid=args.keep_neg_mid,
-                                         keep_neg=args.keep_neg,
-                                         keep_low_pos=args.keep_low_pos)
-        best_df  = all_df[0].iloc[us_idx].reset_index(drop=True)
+        us_idx  = _undersample_indices(all_y[0], seed=best_us_seed,
+                                        keep_neg_mid=args.keep_neg_mid,
+                                        keep_neg=args.keep_neg,
+                                        keep_low_pos=args.keep_low_pos)
+        best_df = all_df[0].iloc[us_idx].reset_index(drop=True)
 
         train_idx, val_idx, test_idx = get_splits(base_cfg, best_df, seed=best_split_seed, csv_mode=True)
 
@@ -537,9 +670,12 @@ def main():
         np.save(hpo_root / "best_val_idx.npy",   val_idx)
         np.save(hpo_root / "best_test_idx.npy",  test_idx)
 
-        print(f"Best dataset → {hpo_root / 'best_dataset.csv'}  "
-              f"({len(best_df)} total, train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)}, "
-              f"us_seed={best_us_seed}, split_seed={best_split_seed})")
+        print(
+            f"Best dataset → {hpo_root / 'best_dataset.csv'}  "
+            f"({len(best_df)} total, train={len(train_idx)}, "
+            f"val={len(val_idx)}, test={len(test_idx)}, "
+            f"us_seed={best_us_seed}, split_seed={best_split_seed})"
+        )
 
 
 if __name__ == "__main__":
