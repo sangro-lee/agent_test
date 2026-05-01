@@ -317,7 +317,16 @@ def main():
     hpo_root.mkdir(parents=True, exist_ok=True)
 
     label_col  = data_cfg.get("label_col", "pIC50")
-    smiles_all = df[data_cfg["smiles_col"]].astype(str).tolist()
+    smiles_col = data_cfg["smiles_col"]
+
+    # Drop rows with missing SMILES or label
+    before = len(df)
+    df = df.dropna(subset=[smiles_col, label_col]).reset_index(drop=True)
+    df = df[df[smiles_col].astype(str).str.strip().ne("nan")].reset_index(drop=True)
+    if len(df) < before:
+        print(f"[hpo_mlp] dropped {before - len(df)} rows with missing SMILES/label")
+
+    smiles_all = df[smiles_col].astype(str).tolist()
 
     # Extract features once for the full dataset
     x_all = load_features(feat_cfg, smiles_all)
