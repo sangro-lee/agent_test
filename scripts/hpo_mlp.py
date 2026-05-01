@@ -48,6 +48,44 @@ from src.utils.seed import set_seed
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 _SEEDS = [0, 1, 42, 123, 999]
+_KEEP  = 50  # fixed undersampling count per range
+
+
+def _undersample_indices(y_vals: np.ndarray, seed: int, keep: int = _KEEP) -> np.ndarray:
+    """Return original indices after undersampling three low-activity ranges."""
+    mask_neg_mid = (y_vals >= -20) & (y_vals <  -10)
+    mask_neg     = (y_vals >= -10) & (y_vals <    0)
+    mask_low_pos = (y_vals >=   0) & (y_vals <   10)
+    mask_other   = ~(mask_neg_mid | mask_neg | mask_low_pos)
+
+    rng = np.random.default_rng(seed)
+
+    def _pick(mask):
+        idxs = np.where(mask)[0]
+        return rng.choice(idxs, size=min(keep, len(idxs)), replace=False)
+
+    selected = np.concatenate([
+        _pick(mask_neg_mid), _pick(mask_neg), _pick(mask_low_pos),
+        np.where(mask_other)[0],
+    ])
+    rng.shuffle(selected)
+    return selected
+
+# Intermediate layers before the fixed latent_dim=4.
+# "" means no intermediate layer → hidden_dims = [4].
+_HIDDEN_DIMS_GRID = [
+    # 0 intermediate
+    "",
+    # 1 intermediate
+    "512", "256", "128", "64",
+    # 2 intermediate
+    "512_256", "512_128", "512_64",
+    "256_128", "256_64",
+    "128_64",
+    # 3 intermediate
+    "512_256_128", "512_256_64", "512_128_64",
+    "256_128_64",
+]
 
 
 def resolve_device(device_cfg: str) -> torch.device:
@@ -200,10 +238,11 @@ def run_trial(
 
 def make_objective(
     base_cfg: dict,
-    x_all: np.ndarray,
-    y_all: np.ndarray,
-    df: pd.DataFrame,
-    hpo_dir: Path,
+    all_x: list,
+    all_y: list,
+    all_df: list,
+    arch_dir: Path,
+    hidden_str: str,
     csv_mode: bool,
 ):
     def objective(trial: optuna.Trial) -> float:
@@ -214,40 +253,32 @@ def make_objective(
         # ── Training hyperparameters ──────────────────────────────────────
         tr_cfg["lr"]           = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
         tr_cfg["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
-        tr_cfg["batch_size"]   = trial.suggest_categorical("batch_size", [8,16, 32, 64])
+        tr_cfg["batch_size"]   = trial.suggest_categorical("batch_size", [8, 16, 32, 64])
 
         # ── Model hyperparameters ─────────────────────────────────────────
         model_cfg["dropout"] = trial.suggest_float("dropout", 0.0, 0.5)
 
-        # Intermediate hidden layers (before latent_dim) — strictly decreasing from {512,256,128,64}
-        hidden_str = trial.suggest_categorical(
-            "hidden_dims",
-            [
-                # 1 layer
-                "512", "256", "128", "64", "4",
-                # 2 layers
-                "512_256", "512_128", "512_64",
-                "256_128", "256_64",
-                "128_64", "128_4",
-                "64_4",
-                # 3 layers
-                "512_256_128", "512_256_64", "512_128_64",
-                "256_128_64", "256_128_4", "256_64_4",
-                "128_64_4",
-            ],
-        )
-        model_cfg["hidden_dims"] = [int(d) for d in hidden_str.split("_")]
+        # hidden_dims: fixed intermediate layers + latent_dim=4
+        intermediate = [int(d) for d in hidden_str.split("_")] if hidden_str else []
+        model_cfg["hidden_dims"] = intermediate + [4]
 
-        # csv_mode: tune seed to vary both data split and model init
-        # run_dir mode: splits are fixed, use trial number as seed
         if csv_mode:
-            trial_seed = trial.suggest_categorical("seed", _SEEDS)
+            # us_seed: controls which molecules survive undersampling (keep=50 fixed)
+            # split_seed: controls train/val split (also used as model init seed)
+            us_seed    = trial.suggest_categorical("us_seed",    _SEEDS)
+            split_seed = trial.suggest_categorical("split_seed", _SEEDS)
+            us_idx     = _undersample_indices(all_y[0], seed=us_seed)
+            x_sel = all_x[0][us_idx]
+            y_sel = all_y[0][us_idx]
+            df_sel = all_df[0].iloc[us_idx].reset_index(drop=True)
+            trial_seed = split_seed
         else:
+            x_sel, y_sel, df_sel = all_x[0], all_y[0], all_df[0]
             trial_seed = trial.number
 
-        trial_dir = hpo_dir / f"trial_{trial.number}"
-        val_r2 = run_trial(cfg, x_all, y_all, df, trial_dir, trial_seed, csv_mode)
-        print(f"  trial {trial.number:3d}  val_r2={val_r2:.4f}  params={trial.params}")
+        trial_dir = arch_dir / f"trial_{trial.number}"
+        val_r2 = run_trial(cfg, x_sel, y_sel, df_sel, trial_dir, trial_seed, csv_mode)
+        print(f"    trial {trial.number:3d}  val_r2={val_r2:.4f}  params={trial.params}")
         return val_r2
 
     return objective
@@ -280,46 +311,63 @@ def main():
 
     hpo_root.mkdir(parents=True, exist_ok=True)
 
-    smiles_all = df[data_cfg["smiles_col"]].astype(str).tolist()
     label_col  = data_cfg.get("label_col", "pIC50")
-    y_all      = df[label_col].astype(float).values
+    smiles_all = df[data_cfg["smiles_col"]].astype(str).tolist()
 
-    # Extract features once before all trials
+    # Extract features once for the full dataset
     x_all = load_features(feat_cfg, smiles_all)
+    y_all = df[label_col].astype(float).values
     print(f"[hpo_mlp] features shape: {x_all.shape}  csv_mode={csv_mode}")
 
-    study_name = args.study_name or (
-        Path(args.config).stem + "_hpo_mlp"
-    )
-    storage = f"sqlite:///{hpo_root}/study.db"
+    all_x  = [x_all]
+    all_y  = [y_all]
+    all_df = [df]
 
-    study = optuna.create_study(
-        study_name=study_name,
-        storage=storage,
-        direction="maximize",
-        load_if_exists=True,
-        sampler=optuna.samplers.TPESampler(seed=0),
-    )
+    base_study_name = args.study_name or Path(args.config).stem
 
-    print(f"Study: {study_name}  (n_trials={args.n_trials})")
-    print(f"Results → {hpo_root}\n")
+    print(f"Results → {hpo_root}")
+    print(f"Architectures: {len(_HIDDEN_DIMS_GRID)}  ×  n_trials: {args.n_trials}\n")
 
-    study.optimize(
-        make_objective(base_cfg, x_all, y_all, df, hpo_root, csv_mode),
-        n_trials=args.n_trials,
-        timeout=args.timeout,
-    )
+    all_results = []
 
-    print("\n=== Best Trial ===")
-    best = study.best_trial
-    print(f"  val_r2   : {best.value:.4f}")
-    for k, v in best.params.items():
+    for hidden_str in _HIDDEN_DIMS_GRID:
+        arch_label = hidden_str + "_4" if hidden_str else "4"
+        arch_dir   = hpo_root / f"arch_{arch_label}"
+        arch_dir.mkdir(parents=True, exist_ok=True)
+
+        study_name = f"{base_study_name}_{arch_label}"
+        storage    = f"sqlite:///{arch_dir}/study.db"
+
+        study = optuna.create_study(
+            study_name=study_name,
+            storage=storage,
+            direction="maximize",
+            load_if_exists=True,
+            sampler=optuna.samplers.TPESampler(seed=0),
+        )
+
+        print(f"[arch {arch_label}]  hidden_dims={([int(d) for d in hidden_str.split('_')] if hidden_str else []) + [4]}")
+        study.optimize(
+            make_objective(base_cfg, all_x, all_y, all_df, arch_dir, hidden_str, csv_mode),
+            n_trials=args.n_trials,
+            timeout=args.timeout,
+        )
+
+        best = study.best_trial
+        print(f"  → best val_r2={best.value:.4f}  params={best.params}\n")
+        all_results.append({"arch": arch_label, "val_r2": best.value, "params": best.params})
+
+    all_results.sort(key=lambda r: r["val_r2"], reverse=True)
+
+    print("=== Overall Best ===")
+    top = all_results[0]
+    print(f"  arch     : {top['arch']}")
+    print(f"  val_r2   : {top['val_r2']:.4f}")
+    for k, v in top["params"].items():
         print(f"  {k:20s}: {v}")
 
-    save_json(hpo_root / "best_params.json", {
-        "val_r2": best.value,
-        "params": best.params,
-    })
+    save_json(hpo_root / "best_params.json", all_results[0])
+    save_json(hpo_root / "all_results.json", all_results)
     print(f"\nSaved → {hpo_root / 'best_params.json'}")
 
 
