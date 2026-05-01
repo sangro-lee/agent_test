@@ -182,14 +182,14 @@ def run_trial(
     trial_seed: int,
     csv_mode: bool,
 ) -> tuple:
-    """Train one trial; return (val_r2, val_loss) evaluated on best checkpoint."""
+    """Train one trial; return (val_r2, val_loss, train_r2, test_r2) on best checkpoint."""
     tr_cfg    = cfg["training"]
     model_cfg = cfg["model"]
 
     set_seed(trial_seed)
     device = resolve_device(str(tr_cfg.get("device", "auto")))
 
-    train_idx, val_idx, _ = get_splits(cfg, df, seed=trial_seed, csv_mode=csv_mode)
+    train_idx, val_idx, test_idx = get_splits(cfg, df, seed=trial_seed, csv_mode=csv_mode)
 
     normalize_y = bool(tr_cfg.get("normalize_y", False))
     if normalize_y:
@@ -209,6 +209,7 @@ def run_trial(
 
     train_loader = make_loader(train_idx, shuffle=True)
     val_loader   = make_loader(val_idx,   shuffle=False)
+    test_loader  = make_loader(test_idx,  shuffle=False) if len(test_idx) > 0 else None
 
     model = FingerprintMLP(
         input_dim=x_all.shape[1],
@@ -246,23 +247,26 @@ def run_trial(
     load_checkpoint(trial_dir / "checkpoints" / "best.pt", model=model, map_location=device)
     model.eval()
 
-    criterion_eval = nn.MSELoss()
-    val_loss_total = 0.0
-    n_val = 0
-    preds, trues = [], []
-    with torch.no_grad():
-        for x_batch, y_batch in val_loader:
-            x_batch = x_batch.to(device)
-            pred, _ = model(x_batch)
-            val_loss_total += criterion_eval(pred, y_batch.to(device)).item() * len(y_batch)
-            n_val += len(y_batch)
-            preds.append(pred.cpu())
-            trues.append(y_batch)
+    def _eval(loader):
+        criterion_e = nn.MSELoss()
+        loss_total, n = 0.0, 0
+        preds, trues = [], []
+        with torch.no_grad():
+            for x_batch, y_batch in loader:
+                x_batch = x_batch.to(device)
+                pred, _ = model(x_batch)
+                loss_total += criterion_e(pred, y_batch.to(device)).item() * len(y_batch)
+                n += len(y_batch)
+                preds.append(pred.cpu())
+                trues.append(y_batch)
+        yp = torch.cat(preds).numpy()
+        yt = torch.cat(trues).numpy()
+        return float(r2_score(yt, yp)), loss_total / max(n, 1)
 
-    val_loss = val_loss_total / max(n_val, 1)
-    y_pred   = torch.cat(preds).numpy()
-    y_true   = torch.cat(trues).numpy()
-    return float(r2_score(y_true, y_pred)), val_loss
+    val_r2,   val_loss = _eval(val_loader)
+    train_r2, _        = _eval(train_loader)
+    test_r2 = _eval(test_loader)[0] if test_loader is not None else None
+    return val_r2, val_loss, train_r2, test_r2
 
 
 def _reconstruct_trial_data(
@@ -462,9 +466,19 @@ def make_objective(
             trial_seed = trial.number
 
         trial_dir = arch_dir / f"trial_{trial.number}"
-        val_r2, val_loss = run_trial(cfg, x_sel, y_sel, df_sel, trial_dir, trial_seed, csv_mode)
+        val_r2, val_loss, train_r2, test_r2 = run_trial(
+            cfg, x_sel, y_sel, df_sel, trial_dir, trial_seed, csv_mode
+        )
         trial.set_user_attr("val_loss", val_loss)
-        print(f"    trial {trial.number:3d}  val_r2={val_r2:.4f}  val_loss={val_loss:.4f}  params={trial.params}")
+        test_str = f"  test_r2={test_r2:.4f}" if test_r2 is not None else ""
+        print(
+            f"    trial {trial.number:3d}"
+            f"  train_r2={train_r2:.4f}"
+            f"  val_r2={val_r2:.4f}"
+            f"  val_loss={val_loss:.4f}"
+            f"{test_str}"
+            f"  params={trial.params}"
+        )
         return val_r2
 
     return objective
