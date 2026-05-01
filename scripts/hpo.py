@@ -21,6 +21,7 @@ import pandas as pd
 import torch
 from torch import nn
 from torch.optim import Adam
+from sklearn.metrics import r2_score
 
 from src.features.graph import SMEMolDataset, SME_NODE_DIM
 from src.models.gnn import SMERGCNModel
@@ -123,12 +124,26 @@ def run_trial(cfg: dict, trial_dir: Path, trial_seed: int) -> float:
         run_dir=trial_dir,
     )
 
-    history = trainer.fit(
+    trainer.fit(
         train_loader=train_loader,
         val_loader=val_loader,
         epochs=int(tr_cfg.get("epochs", 100)),
     )
-    return float(history.get("best_val_loss", float("inf")))
+
+    # compute val R² with best checkpoint
+    from src.utils.io import load_checkpoint
+    load_checkpoint(trial_dir / "checkpoints" / "best.pt", model=model, map_location=device)
+    model.eval()
+    preds, trues = [], []
+    with torch.no_grad():
+        for batch in val_loader:
+            batch = batch.to(device)
+            pred, _ = model(batch)
+            preds.append(pred.cpu())
+            trues.append(batch.y.view(-1).cpu())
+    y_pred = torch.cat(preds).numpy()
+    y_true = torch.cat(trues).numpy()
+    return float(r2_score(y_true, y_pred))
 
 
 def make_objective(base_cfg: dict, hpo_dir: Path, base_seed: int):
@@ -161,7 +176,7 @@ def make_objective(base_cfg: dict, hpo_dir: Path, base_seed: int):
         trial_seed = base_seed + trial.number
 
         val_loss = run_trial(cfg, trial_dir, trial_seed)
-        print(f"  trial {trial.number:3d}  val_loss={val_loss:.4f}  params={trial.params}")
+        print(f"  trial {trial.number:3d}  val_r2={val_loss:.4f}  params={trial.params}")
         return val_loss
 
     return objective
@@ -187,7 +202,7 @@ def main():
     study = optuna.create_study(
         study_name=study_name,
         storage=storage,
-        direction="minimize",
+        direction="maximize",
         load_if_exists=True,
         sampler=optuna.samplers.TPESampler(seed=args.seed),
     )
@@ -203,13 +218,13 @@ def main():
 
     print("\n=== Best Trial ===")
     best = study.best_trial
-    print(f"  val_loss : {best.value:.4f}")
+    print(f"  val_r2   : {best.value:.4f}")
     for k, v in best.params.items():
         print(f"  {k:20s}: {v}")
 
     save_json(hpo_dir / "best_params.json", {
-        "val_loss": best.value,
-        "params":   best.params,
+        "val_r2": best.value,
+        "params": best.params,
     })
     print(f"\nSaved → {hpo_dir / 'best_params.json'}")
 
