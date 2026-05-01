@@ -397,12 +397,23 @@ def main():
     print(f"Saved → {hpo_root / 'best_params.json'}")
 
     if csv_mode and "us_seed" in top["params"]:
-        best_us_seed = top["params"]["us_seed"]
-        us_idx = _undersample_indices(all_y[0], seed=best_us_seed)
-        best_df = all_df[0].iloc[us_idx].reset_index(drop=True)
-        best_dataset_path = hpo_root / "best_dataset.csv"
-        best_df.to_csv(best_dataset_path, index=False)
-        print(f"Best dataset → {best_dataset_path}  ({len(best_df)} molecules, us_seed={best_us_seed})")
+        best_us_seed    = top["params"]["us_seed"]
+        best_split_seed = top["params"]["split_seed"]
+
+        us_idx   = _undersample_indices(all_y[0], seed=best_us_seed)
+        best_df  = all_df[0].iloc[us_idx].reset_index(drop=True)
+
+        train_idx, val_idx = get_splits(base_cfg, best_df, seed=best_split_seed, csv_mode=True)
+
+        best_df.to_csv(hpo_root / "best_dataset.csv", index=False)
+        best_df.iloc[train_idx].reset_index(drop=True).to_csv(hpo_root / "best_train.csv", index=False)
+        best_df.iloc[val_idx].reset_index(drop=True).to_csv(hpo_root / "best_val.csv", index=False)
+        np.save(hpo_root / "best_train_idx.npy", train_idx)
+        np.save(hpo_root / "best_val_idx.npy",   val_idx)
+
+        print(f"Best dataset → {hpo_root / 'best_dataset.csv'}  "
+              f"({len(best_df)} total, train={len(train_idx)}, val={len(val_idx)}, "
+              f"us_seed={best_us_seed}, split_seed={best_split_seed})")
 
 
 if __name__ == "__main__":
