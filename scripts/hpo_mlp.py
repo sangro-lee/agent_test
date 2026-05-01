@@ -93,7 +93,7 @@ def get_splits(cfg: dict, df: pd.DataFrame, seed: int, csv_mode: bool):
         tr_cfg = cfg["training"]
         data_cfg = cfg["data"]
         split_type = str(tr_cfg.get("split_type", "random")).lower()
-        val_frac  = float(tr_cfg.get("val_fraction", 0.1))
+        val_frac  = float(tr_cfg.get("val_fraction", 0.2))
         test_frac = float(tr_cfg.get("test_fraction", 0.1))
         if split_type == "scaffold":
             train_idx, val_idx, _ = scaffold_split(
