@@ -13,4 +13,13 @@ def smiles_to_unimol(smiles_list: list[str]) -> np.ndarray:
         raise ImportError("unimol_tools is not installed. Run: pip install unimol_tools")
     clf = UniMolRepr(data_type="molecule", remove_hs=False)
     reprs = clf.get_repr(smiles_list)
-    return np.array(reprs["cls_repr"], dtype=np.float32)
+    if isinstance(reprs, dict):
+        return np.array(reprs["cls_repr"], dtype=np.float32)
+    elif isinstance(reprs, np.ndarray):
+        return reprs.astype(np.float32)
+    else:
+        # list of dicts or list of arrays
+        first = reprs[0]
+        if isinstance(first, dict):
+            return np.array([r["cls_repr"] for r in reprs], dtype=np.float32)
+        return np.array(reprs, dtype=np.float32)
