@@ -305,14 +305,13 @@ def main():
 
     # Determine data source
     csv_mode = args.csv is not None
+    base_run_dir = resolve_run_dir(base_cfg, create_if_missing=True)
+    hpo_root = base_run_dir / "hpo_mlp"
+
     if csv_mode:
         df = pd.read_csv(args.csv)
-        # Save path used for study storage
-        hpo_root = Path(args.csv).parent / "hpo_mlp"
     else:
-        base_run_dir = resolve_run_dir(base_cfg, create_if_missing=False)
         df = pd.read_csv(base_run_dir / "cleaned_dataset.csv")
-        hpo_root = base_run_dir / "hpo_mlp"
 
     hpo_root.mkdir(parents=True, exist_ok=True)
 
