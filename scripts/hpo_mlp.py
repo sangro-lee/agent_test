@@ -244,6 +244,93 @@ def run_trial(
     return float(r2_score(y_true, y_pred))
 
 
+def scatter_best_trial(
+    trial: optuna.Trial,
+    trial_dir: Path,
+    base_cfg: dict,
+    all_x: list,
+    all_y: list,
+    all_df: list,
+    hidden_str: str,
+    arch_label: str,
+    csv_mode: bool,
+    keep_neg_mid: int,
+    keep_neg: int,
+    keep_low_pos: int,
+    save_path: Path,
+):
+    from src.evaluation.plots import plot_scatter
+    from src.utils.io import load_checkpoint
+
+    cfg       = copy.deepcopy(base_cfg)
+    tr_cfg    = cfg["training"]
+    model_cfg = cfg["model"]
+    label_col = cfg["data"].get("label_col", "y")
+
+    tr_cfg["lr"]           = trial.params["lr"]
+    tr_cfg["weight_decay"] = trial.params["weight_decay"]
+    tr_cfg["batch_size"]   = trial.params["batch_size"]
+    model_cfg["dropout"]   = trial.params["dropout"]
+    intermediate = [int(d) for d in hidden_str.split("_")] if hidden_str else []
+    model_cfg["hidden_dims"] = intermediate + [4]
+
+    device = resolve_device(str(tr_cfg.get("device", "auto")))
+
+    if csv_mode:
+        us_seed    = trial.params["us_seed"]
+        split_seed = trial.params["split_seed"]
+        us_idx  = _undersample_indices(all_y[0], seed=us_seed,
+                                       keep_neg_mid=keep_neg_mid,
+                                       keep_neg=keep_neg,
+                                       keep_low_pos=keep_low_pos)
+        x_sel, y_sel, df_sel = all_x[0][us_idx], all_y[0][us_idx], all_df[0].iloc[us_idx].reset_index(drop=True)
+        trial_seed = split_seed
+    else:
+        x_sel, y_sel, df_sel = all_x[0], all_y[0], all_df[0]
+        trial_seed = trial.number
+
+    normalize_y = bool(tr_cfg.get("normalize_y", False))
+    train_idx, val_idx, _ = get_splits(cfg, df_sel, seed=trial_seed, csv_mode=csv_mode)
+    if normalize_y:
+        y_mean = float(y_sel[train_idx].mean())
+        y_std  = float(y_sel[train_idx].std()) or 1.0
+        y_norm = (y_sel - y_mean) / y_std
+    else:
+        y_norm, y_mean, y_std = y_sel, 0.0, 1.0
+
+    batch_size = int(tr_cfg["batch_size"])
+    val_loader = DataLoader(
+        TensorDataset(torch.tensor(x_sel[val_idx], dtype=torch.float32),
+                      torch.tensor(y_norm[val_idx], dtype=torch.float32)),
+        batch_size=batch_size, shuffle=False,
+    )
+
+    model = FingerprintMLP(
+        input_dim=x_sel.shape[1],
+        hidden_dims=model_cfg["hidden_dims"],
+        dropout=float(model_cfg["dropout"]),
+        activation=str(model_cfg.get("activation", "relu")),
+    ).to(device)
+    load_checkpoint(trial_dir / "checkpoints" / "best.pt", model=model, map_location=device)
+    model.eval()
+
+    preds, trues = [], []
+    with torch.no_grad():
+        for x_b, y_b in val_loader:
+            pred, _ = model(x_b.to(device))
+            preds.append(pred.cpu()); trues.append(y_b)
+    y_pred = torch.cat(preds).numpy()
+    y_true = torch.cat(trues).numpy()
+
+    if normalize_y:
+        y_pred = y_pred * y_std + y_mean
+        y_true = y_true * y_std + y_mean
+
+    plot_scatter(y_true, y_pred,
+                 title=f"Val — arch {arch_label}",
+                 save_path=save_path, label=label_col)
+
+
 def make_objective(
     base_cfg: dict,
     all_x: list,
@@ -391,6 +478,18 @@ def main():
         best = study.best_trial
         best_trial_dir = arch_dir / f"trial_{best.number}"
         print(f"  → best val_r2={best.value:.4f}  params={best.params}\n")
+
+        scatter_best_trial(
+            trial=best, trial_dir=best_trial_dir,
+            base_cfg=base_cfg, all_x=all_x, all_y=all_y, all_df=all_df,
+            hidden_str=hidden_str, arch_label=arch_label,
+            csv_mode=csv_mode,
+            keep_neg_mid=args.keep_neg_mid,
+            keep_neg=args.keep_neg,
+            keep_low_pos=args.keep_low_pos,
+            save_path=arch_dir / "scatter_best_val.png",
+        )
+
         all_results.append({
             "arch": arch_label, "val_r2": best.value, "params": best.params,
             "trial_dir": str(best_trial_dir),
