@@ -123,7 +123,7 @@ def load_features(feat_cfg: dict, smiles_all: list) -> np.ndarray:
 
 
 def get_splits(cfg: dict, df: pd.DataFrame, seed: int, csv_mode: bool):
-    """Return (train_idx, val_idx) arrays.
+    """Return (train_idx, val_idx, test_idx) arrays.
 
     csv_mode=True  → generate fresh splits from df using config fractions + trial seed.
     csv_mode=False → load pre-saved npy splits from run_dir.
@@ -135,15 +135,15 @@ def get_splits(cfg: dict, df: pd.DataFrame, seed: int, csv_mode: bool):
         val_frac  = float(tr_cfg.get("val_fraction", 0.2))
         test_frac = float(tr_cfg.get("test_fraction", 0.1))
         if split_type == "scaffold":
-            train_idx, val_idx, _ = scaffold_split(
+            train_idx, val_idx, test_idx = scaffold_split(
                 df, smiles_col=data_cfg["smiles_col"],
                 val_frac=val_frac, test_frac=test_frac, seed=seed,
             )
         else:
-            train_idx, val_idx, _ = random_split(
+            train_idx, val_idx, test_idx = random_split(
                 df, val_frac=val_frac, test_frac=test_frac, seed=seed,
             )
-        return train_idx, val_idx
+        return train_idx, val_idx, test_idx
     else:
         base_run_dir = resolve_run_dir(cfg, create_if_missing=False)
         splits_dir = base_run_dir / "splits"
@@ -168,7 +168,7 @@ def run_trial(
     set_seed(trial_seed)
     device = resolve_device(str(tr_cfg.get("device", "auto")))
 
-    train_idx, val_idx = get_splits(cfg, df, seed=trial_seed, csv_mode=csv_mode)
+    train_idx, val_idx, _ = get_splits(cfg, df, seed=trial_seed, csv_mode=csv_mode)
 
     normalize_y = bool(tr_cfg.get("normalize_y", False))
     if normalize_y:
@@ -403,16 +403,18 @@ def main():
         us_idx   = _undersample_indices(all_y[0], seed=best_us_seed)
         best_df  = all_df[0].iloc[us_idx].reset_index(drop=True)
 
-        train_idx, val_idx = get_splits(base_cfg, best_df, seed=best_split_seed, csv_mode=True)
+        train_idx, val_idx, test_idx = get_splits(base_cfg, best_df, seed=best_split_seed, csv_mode=True)
 
         best_df.to_csv(hpo_root / "best_dataset.csv", index=False)
         best_df.iloc[train_idx].reset_index(drop=True).to_csv(hpo_root / "best_train.csv", index=False)
-        best_df.iloc[val_idx].reset_index(drop=True).to_csv(hpo_root / "best_val.csv", index=False)
+        best_df.iloc[val_idx].reset_index(drop=True).to_csv(hpo_root  / "best_val.csv",   index=False)
+        best_df.iloc[test_idx].reset_index(drop=True).to_csv(hpo_root / "best_test.csv",  index=False)
         np.save(hpo_root / "best_train_idx.npy", train_idx)
         np.save(hpo_root / "best_val_idx.npy",   val_idx)
+        np.save(hpo_root / "best_test_idx.npy",  test_idx)
 
         print(f"Best dataset → {hpo_root / 'best_dataset.csv'}  "
-              f"({len(best_df)} total, train={len(train_idx)}, val={len(val_idx)}, "
+              f"({len(best_df)} total, train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)}, "
               f"us_seed={best_us_seed}, split_seed={best_split_seed})")
 
 
