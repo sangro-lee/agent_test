@@ -231,10 +231,19 @@ def main():
         save_json(eval_dir / f"metrics_{split_name}.json", metrics)
         plot_scatter(
             y_true, y_pred,
-            f"{split_name.capitalize()} — True vs Pred",
+            f"{split_name.capitalize()} — True vs Pred (normalized)",
             eval_dir / f"scatter_{split_name}.png",
             label=label_col,
         )
+        if normalize_y:
+            y_true_orig = y_true * y_std + y_mean
+            y_pred_orig = y_pred * y_std + y_mean
+            plot_scatter(
+                y_true_orig, y_pred_orig,
+                f"{split_name.capitalize()} — True vs Pred",
+                eval_dir / f"scatter_{split_name}_orig.png",
+                label=label_col,
+            )
         plot_latent_tsne(latents, y_true, eval_dir / f"tsne_{split_name}.png", split_name=split_name)
         plot_latent_umap(latents, y_true, eval_dir / f"umap_{split_name}.png", split_name=split_name)
 
