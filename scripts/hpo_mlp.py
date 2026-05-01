@@ -216,6 +216,7 @@ def run_trial(
         hidden_dims=hidden_dims,
         dropout=float(model_cfg.get("dropout", 0.2)),
         activation=str(model_cfg.get("activation", "relu")),
+        no_latent_act=bool(model_cfg.get("no_latent_act", False)),
     ).to(device)
 
     optimizer = Adam(
@@ -387,6 +388,7 @@ def scatter_best_trial(
         hidden_dims=model_cfg["hidden_dims"],
         dropout=float(model_cfg["dropout"]),
         activation=str(model_cfg.get("activation", "relu")),
+        no_latent_act=bool(model_cfg.get("no_latent_act", False)),
     ).to(device)
     load_checkpoint(trial_dir / "checkpoints" / "best.pt", model=model, map_location=device)
     model.eval()
