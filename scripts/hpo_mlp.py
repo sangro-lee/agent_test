@@ -181,6 +181,8 @@ def run_trial(
     trial_dir: Path,
     trial_seed: int,
     csv_mode: bool,
+    save_artifacts: bool = False,
+    arch_label: str = "",
 ) -> tuple:
     """Train one trial; return (val_r2, val_loss, train_r2, test_r2) on best checkpoint."""
     tr_cfg    = cfg["training"]
@@ -197,7 +199,7 @@ def run_trial(
         y_std  = float(y_all[train_idx].std()) or 1.0
         y_norm = (y_all - y_mean) / y_std
     else:
-        y_norm = y_all
+        y_norm, y_mean, y_std = y_all, 0.0, 1.0
 
     batch_size  = int(tr_cfg["batch_size"])
     hidden_dims = list(model_cfg["hidden_dims"])
@@ -262,11 +264,42 @@ def run_trial(
                 trues.append(y_batch)
         yp = torch.cat(preds).numpy()
         yt = torch.cat(trues).numpy()
-        return float(r2_score(yt, yp)), loss_total / max(n, 1)
+        if normalize_y:
+            yp = yp * y_std + y_mean
+            yt = yt * y_std + y_mean
+        return float(r2_score(yt, yp)), loss_total / max(n, 1), yt, yp
 
-    val_r2,   val_loss = _eval(val_loader)
-    train_r2, _        = _eval(train_loader)
-    test_r2 = _eval(test_loader)[0] if test_loader is not None else None
+    val_r2,   val_loss, yt_val,   yp_val   = _eval(val_loader)
+    train_r2, _,        yt_train, yp_train = _eval(train_loader)
+    if test_loader is not None:
+        test_r2, _, yt_test, yp_test = _eval(test_loader)
+    else:
+        test_r2, yt_test, yp_test = None, None, None
+
+    if save_artifacts:
+        from src.evaluation.plots import plot_scatter
+        label_col = cfg["data"].get("label_col", "y")
+        trial_tag = trial_dir.name  # e.g. "trial_0"
+
+        save_json(trial_dir / "y_scaler.json", {
+            "y_mean": y_mean, "y_std": y_std, "normalize_y": normalize_y,
+        })
+        df.to_csv(trial_dir / "dataset.csv", index=False)
+        np.save(trial_dir / "train_idx.npy", train_idx)
+        np.save(trial_dir / "val_idx.npy",   val_idx)
+        np.save(trial_dir / "test_idx.npy",  test_idx)
+
+        plot_scatter(yt_val,   yp_val,
+                     title=f"Val — arch {arch_label} {trial_tag}",
+                     save_path=trial_dir / "scatter_val.png", label=label_col)
+        plot_scatter(yt_train, yp_train,
+                     title=f"Train — arch {arch_label} {trial_tag}",
+                     save_path=trial_dir / "scatter_train.png", label=label_col)
+        if yt_test is not None:
+            plot_scatter(yt_test, yp_test,
+                         title=f"Test — arch {arch_label} {trial_tag}",
+                         save_path=trial_dir / "scatter_test.png", label=label_col)
+
     return val_r2, val_loss, train_r2, test_r2
 
 
@@ -467,9 +500,11 @@ def make_objective(
             x_sel, y_sel, df_sel = all_x[0], all_y[0], all_df[0]
             trial_seed = trial.number
 
-        trial_dir = arch_dir / f"trial_{trial.number}"
+        trial_dir  = arch_dir / f"trial_{trial.number}"
+        arch_label = hidden_str + "_4" if hidden_str else "4"
         val_r2, val_loss, train_r2, test_r2 = run_trial(
-            cfg, x_sel, y_sel, df_sel, trial_dir, trial_seed, csv_mode
+            cfg, x_sel, y_sel, df_sel, trial_dir, trial_seed, csv_mode,
+            save_artifacts=True, arch_label=arch_label,
         )
         trial.set_user_attr("val_loss", val_loss)
         test_str = f"  test_r2={test_r2:.4f}" if test_r2 is not None else ""
