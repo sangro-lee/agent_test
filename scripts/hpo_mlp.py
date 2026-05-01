@@ -238,8 +238,12 @@ def make_objective(
         )
         model_cfg["hidden_dims"] = [int(d) for d in hidden_str.split("_")]
 
-        # Seed (controls model init; in csv_mode also controls data split)
-        trial_seed = trial.suggest_categorical("seed", _SEEDS)
+        # csv_mode: tune seed to vary both data split and model init
+        # run_dir mode: splits are fixed, use trial number as seed
+        if csv_mode:
+            trial_seed = trial.suggest_categorical("seed", _SEEDS)
+        else:
+            trial_seed = trial.number
 
         trial_dir = hpo_dir / f"trial_{trial.number}"
         val_r2 = run_trial(cfg, x_all, y_all, df, trial_dir, trial_seed, csv_mode)
