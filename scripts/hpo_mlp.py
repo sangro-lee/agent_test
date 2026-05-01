@@ -49,10 +49,15 @@ from src.utils.seed import set_seed
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 _SEEDS = [0, 1, 42, 123, 999]
-_KEEP  = 50  # fixed undersampling count per range
 
 
-def _undersample_indices(y_vals: np.ndarray, seed: int, keep: int = _KEEP) -> np.ndarray:
+def _undersample_indices(
+    y_vals: np.ndarray,
+    seed: int,
+    keep_neg_mid: int = 50,
+    keep_neg: int = 50,
+    keep_low_pos: int = 50,
+) -> np.ndarray:
     """Return original indices after undersampling three low-activity ranges."""
     mask_neg_mid = (y_vals >= -20) & (y_vals <  -10)
     mask_neg     = (y_vals >= -10) & (y_vals <    0)
@@ -61,12 +66,14 @@ def _undersample_indices(y_vals: np.ndarray, seed: int, keep: int = _KEEP) -> np
 
     rng = np.random.default_rng(seed)
 
-    def _pick(mask):
+    def _pick(mask, n):
         idxs = np.where(mask)[0]
-        return rng.choice(idxs, size=min(keep, len(idxs)), replace=False)
+        return rng.choice(idxs, size=min(n, len(idxs)), replace=False)
 
     selected = np.concatenate([
-        _pick(mask_neg_mid), _pick(mask_neg), _pick(mask_low_pos),
+        _pick(mask_neg_mid, keep_neg_mid),
+        _pick(mask_neg,     keep_neg),
+        _pick(mask_low_pos, keep_low_pos),
         np.where(mask_other)[0],
     ])
     rng.shuffle(selected)
@@ -245,6 +252,9 @@ def make_objective(
     arch_dir: Path,
     hidden_str: str,
     csv_mode: bool,
+    keep_neg_mid: int = 50,
+    keep_neg: int = 50,
+    keep_low_pos: int = 50,
 ):
     def objective(trial: optuna.Trial) -> float:
         cfg = copy.deepcopy(base_cfg)
@@ -268,7 +278,10 @@ def make_objective(
             # split_seed: controls train/val split (also used as model init seed)
             us_seed    = trial.suggest_categorical("us_seed",    _SEEDS)
             split_seed = trial.suggest_categorical("split_seed", _SEEDS)
-            us_idx     = _undersample_indices(all_y[0], seed=us_seed)
+            us_idx     = _undersample_indices(all_y[0], seed=us_seed,
+                                              keep_neg_mid=keep_neg_mid,
+                                              keep_neg=keep_neg,
+                                              keep_low_pos=keep_low_pos)
             x_sel = all_x[0][us_idx]
             y_sel = all_y[0][us_idx]
             df_sel = all_df[0].iloc[us_idx].reset_index(drop=True)
@@ -290,10 +303,16 @@ def main():
     parser.add_argument("--config",     required=True,  type=str)
     parser.add_argument("--csv",        default=None,   type=str,
                         help="Path to raw CSV. If given, splits are generated per trial.")
-    parser.add_argument("--label_col",  default=None,   type=str,
+    parser.add_argument("--label_col",    default=None,  type=str,
                         help="Override label column name (e.g. 'Malachite green assay_50uM (%%)').")
-    parser.add_argument("--smiles_col", default=None,   type=str,
+    parser.add_argument("--smiles_col",   default=None,  type=str,
                         help="Override SMILES column name.")
+    parser.add_argument("--keep_neg_mid", default=50,    type=int,
+                        help="Max samples to keep from y in [-20, -10) (default: 50).")
+    parser.add_argument("--keep_neg",     default=50,    type=int,
+                        help="Max samples to keep from y in [-10, 0)  (default: 50).")
+    parser.add_argument("--keep_low_pos", default=50,    type=int,
+                        help="Max samples to keep from y in [0, 10)   (default: 50).")
     parser.add_argument("--n_trials",   default=50,     type=int)
     parser.add_argument("--study_name", default=None,   type=str)
     parser.add_argument("--timeout",    default=None,   type=int, help="seconds")
@@ -361,7 +380,10 @@ def main():
 
         print(f"[arch {arch_label}]  hidden_dims={([int(d) for d in hidden_str.split('_')] if hidden_str else []) + [4]}")
         study.optimize(
-            make_objective(base_cfg, all_x, all_y, all_df, arch_dir, hidden_str, csv_mode),
+            make_objective(base_cfg, all_x, all_y, all_df, arch_dir, hidden_str, csv_mode,
+                           keep_neg_mid=args.keep_neg_mid,
+                           keep_neg=args.keep_neg,
+                           keep_low_pos=args.keep_low_pos),
             n_trials=args.n_trials,
             timeout=args.timeout,
         )
@@ -400,7 +422,10 @@ def main():
         best_us_seed    = top["params"]["us_seed"]
         best_split_seed = top["params"]["split_seed"]
 
-        us_idx   = _undersample_indices(all_y[0], seed=best_us_seed)
+        us_idx   = _undersample_indices(all_y[0], seed=best_us_seed,
+                                         keep_neg_mid=args.keep_neg_mid,
+                                         keep_neg=args.keep_neg,
+                                         keep_low_pos=args.keep_low_pos)
         best_df  = all_df[0].iloc[us_idx].reset_index(drop=True)
 
         train_idx, val_idx, test_idx = get_splits(base_cfg, best_df, seed=best_split_seed, csv_mode=True)
