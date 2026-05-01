@@ -24,6 +24,7 @@ Multi-GPU (same study_name, different devices):
 """
 import argparse
 import copy
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -289,6 +290,10 @@ def main():
     parser.add_argument("--config",     required=True,  type=str)
     parser.add_argument("--csv",        default=None,   type=str,
                         help="Path to raw CSV. If given, splits are generated per trial.")
+    parser.add_argument("--label_col",  default=None,   type=str,
+                        help="Override label column name (e.g. 'Malachite green assay_50uM (%%)').")
+    parser.add_argument("--smiles_col", default=None,   type=str,
+                        help="Override SMILES column name.")
     parser.add_argument("--n_trials",   default=50,     type=int)
     parser.add_argument("--study_name", default=None,   type=str)
     parser.add_argument("--timeout",    default=None,   type=int, help="seconds")
@@ -354,8 +359,12 @@ def main():
         )
 
         best = study.best_trial
+        best_trial_dir = arch_dir / f"trial_{best.number}"
         print(f"  → best val_r2={best.value:.4f}  params={best.params}\n")
-        all_results.append({"arch": arch_label, "val_r2": best.value, "params": best.params})
+        all_results.append({
+            "arch": arch_label, "val_r2": best.value, "params": best.params,
+            "trial_dir": str(best_trial_dir),
+        })
 
     all_results.sort(key=lambda r: r["val_r2"], reverse=True)
 
@@ -366,9 +375,18 @@ def main():
     for k, v in top["params"].items():
         print(f"  {k:20s}: {v}")
 
+    # Copy best model checkpoint to hpo_root
+    best_ckpt_src = Path(top["trial_dir"]) / "checkpoints" / "best.pt"
+    best_ckpt_dst = hpo_root / "best_model.pt"
+    if best_ckpt_src.exists():
+        shutil.copy2(best_ckpt_src, best_ckpt_dst)
+        print(f"Best model → {best_ckpt_dst}")
+    else:
+        print(f"[warning] best checkpoint not found: {best_ckpt_src}")
+
     save_json(hpo_root / "best_params.json", all_results[0])
     save_json(hpo_root / "all_results.json", all_results)
-    print(f"\nSaved → {hpo_root / 'best_params.json'}")
+    print(f"Saved → {hpo_root / 'best_params.json'}")
 
     if csv_mode and "us_seed" in top["params"]:
         best_us_seed = top["params"]["us_seed"]
