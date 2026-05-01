@@ -370,6 +370,14 @@ def main():
     save_json(hpo_root / "all_results.json", all_results)
     print(f"\nSaved → {hpo_root / 'best_params.json'}")
 
+    if csv_mode and "us_seed" in top["params"]:
+        best_us_seed = top["params"]["us_seed"]
+        us_idx = _undersample_indices(all_y[0], seed=best_us_seed)
+        best_df = all_df[0].iloc[us_idx].reset_index(drop=True)
+        best_dataset_path = hpo_root / "best_dataset.csv"
+        best_df.to_csv(best_dataset_path, index=False)
+        print(f"Best dataset → {best_dataset_path}  ({len(best_df)} molecules, us_seed={best_us_seed})")
+
 
 if __name__ == "__main__":
     main()
