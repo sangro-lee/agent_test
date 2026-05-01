@@ -6,7 +6,7 @@ data:
   unit_col: null
 
 features:
-  type: "fingerprint"  # "fingerprint" | "graph" | "sme_graph"
+  type: "fingerprint"  # "fingerprint" | "unimol" | "graph" | "sme_graph"
   fp_bits: 2048
   fp_radius: 2
   use_chirality: false

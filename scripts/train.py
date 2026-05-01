@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from src.features.descriptors import smiles_to_descriptors
 from src.features.fingerprints import smiles_to_fp
 from src.features.graph import MolDataset, SMEMolDataset, SME_NODE_DIM
+from src.features.unimol import smiles_to_unimol
 from src.models.gnn import AttentiveFPModel, SMERGCNModel
 from src.models.mlp import FingerprintMLP
 from src.models.vqc_module import VQCEncoderHead
@@ -144,8 +145,12 @@ def main():
     latent_dim = int(model_cfg.get("latent_dim", 128))
     use_vqc = bool(model_cfg.get("use_vqc", False))
 
-    if feature_type == "fingerprint":
-        x_all = build_fp_features(smiles_all, feat_cfg)
+    if feature_type in ("fingerprint", "unimol"):
+        if feature_type == "fingerprint":
+            x_all = build_fp_features(smiles_all, feat_cfg)
+        else:
+            print("[train] extracting Uni-Mol embeddings (one-time)...")
+            x_all = smiles_to_unimol(smiles_all)
 
         def make_loader(indices, shuffle=False):
             x = torch.tensor(x_all[indices], dtype=torch.float32)
@@ -160,12 +165,11 @@ def main():
         pred_test_loader  = make_loader(test_idx,  shuffle=False) if test_idx is not None else None
 
         if model_type != "mlp":
-            raise ValueError("For fingerprint features, model.type must be 'mlp'.")
+            raise ValueError(f"For {feature_type} features, model.type must be 'mlp'.")
 
         hidden_dims = list(model_cfg.get("hidden_dims", [512, 256, 128]))
         if not use_vqc:
-            hidden_dims[-1] = latent_dim   # force backbone output = latent_dim
-        # in VQC mode: hidden_dims[-1] is the VQC input dim (keep as-is from config)
+            hidden_dims[-1] = latent_dim
         backbone = FingerprintMLP(
             input_dim=x_all.shape[1],
             hidden_dims=hidden_dims,

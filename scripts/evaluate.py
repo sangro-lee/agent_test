@@ -12,6 +12,7 @@ from src.evaluation.plots import plot_latent_tsne, plot_latent_umap, plot_loss_c
 from src.features.descriptors import smiles_to_descriptors
 from src.features.fingerprints import smiles_to_fp
 from src.features.graph import MolDataset, SMEMolDataset, SME_NODE_DIM
+from src.features.unimol import smiles_to_unimol
 from src.models.gnn import AttentiveFPModel, SMERGCNModel
 from src.models.mlp import FingerprintMLP
 from src.models.vqc_module import VQCEncoderHead
@@ -119,18 +120,21 @@ def main():
     latent_dim   = int(model_cfg.get("latent_dim", 128))
     use_vqc      = bool(model_cfg.get("use_vqc", False))
 
-    if feature_type == "fingerprint":
+    if feature_type in ("fingerprint", "unimol"):
         if model_type != "mlp":
-            raise ValueError("For fingerprint features, model.type must be 'mlp'.")
-        x_fp = smiles_to_fp(
-            smiles_all,
-            bits=int(feat_cfg.get("fp_bits", 2048)),
-            radius=int(feat_cfg.get("fp_radius", 2)),
-            use_chirality=bool(feat_cfg.get("use_chirality", False)),
-        )
-        if bool(feat_cfg.get("use_descriptors", False)):
-            x_fp = np.concatenate([x_fp, smiles_to_descriptors(smiles_all)], axis=1)
-        input_dim = x_fp.shape[1]
+            raise ValueError(f"For {feature_type} features, model.type must be 'mlp'.")
+        if feature_type == "fingerprint":
+            x_fp = smiles_to_fp(
+                smiles_all,
+                bits=int(feat_cfg.get("fp_bits", 2048)),
+                radius=int(feat_cfg.get("fp_radius", 2)),
+                use_chirality=bool(feat_cfg.get("use_chirality", False)),
+            )
+            if bool(feat_cfg.get("use_descriptors", False)):
+                x_fp = np.concatenate([x_fp, smiles_to_descriptors(smiles_all)], axis=1)
+        else:
+            print("[evaluate] extracting Uni-Mol embeddings (one-time)...")
+            x_fp = smiles_to_unimol(smiles_all)
 
         def make_loader(idx):
             x = torch.tensor(x_fp[idx], dtype=torch.float32)
@@ -141,7 +145,7 @@ def main():
         if not use_vqc:
             hidden_dims[-1] = latent_dim
         backbone = FingerprintMLP(
-            input_dim=input_dim,
+            input_dim=x_fp.shape[1],
             hidden_dims=hidden_dims,
             dropout=float(model_cfg.get("dropout", 0.2)),
             activation=str(model_cfg.get("activation", "relu")),
