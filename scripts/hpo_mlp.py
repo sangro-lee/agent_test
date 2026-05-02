@@ -89,8 +89,20 @@ def _undersample_indices(
     return selected
 
 
-# Intermediate layers before the fixed latent_dim=4.
-# "" means no intermediate layer → hidden_dims = [4].
+def _make_arch_label(hidden_str: str, latent_dim: int) -> str:
+    parts = hidden_str.split("_") if hidden_str else []
+    if latent_dim > 0:
+        parts.append(str(latent_dim))
+    return "_".join(parts) if parts else "direct"
+
+
+def _make_hidden_dims(hidden_str: str, latent_dim: int) -> list:
+    intermediate = [int(d) for d in hidden_str.split("_")] if hidden_str else []
+    return intermediate + [latent_dim] if latent_dim > 0 else intermediate
+
+
+# Intermediate layers before the latent dim (default 4, configurable via --latent_dim).
+# "" means no intermediate layer.
 _HIDDEN_DIMS_GRID = [
     # 0 intermediate
     "",
@@ -240,11 +252,17 @@ def run_trial(
         checkpoint_every=0,
         run_dir=trial_dir,
     )
-    trainer.fit(
+    history = trainer.fit(
         train_loader=train_loader,
         val_loader=val_loader,
         epochs=int(tr_cfg.get("epochs", 100)),
     )
+
+    # also save best.pt with epoch in filename for traceability
+    best_epoch = history.get("best_epoch", -1)
+    best_pt    = trial_dir / "checkpoints" / "best.pt"
+    if best_epoch > 0 and best_pt.exists():
+        shutil.copy2(best_pt, trial_dir / "checkpoints" / f"best_epoch{best_epoch}.pt")
 
     from src.utils.io import load_checkpoint
     load_checkpoint(trial_dir / "checkpoints" / "best.pt", model=model, map_location=device)
@@ -313,8 +331,12 @@ def _reconstruct_trial_data(
     keep_neg_mid: int,
     keep_neg: int,
     keep_low_pos: int,
+    us_seed: int = None,
 ):
-    """Reconstruct (cfg, x_sel, y_sel, df_sel, trial_seed) from trial params."""
+    """Reconstruct (cfg, x_sel, y_sel, df_sel, trial_seed) from trial params.
+
+    us_seed: fixed from outer grid loop (csv_mode). Falls back to trial.params if None.
+    """
     cfg       = copy.deepcopy(base_cfg)
     tr_cfg    = cfg["training"]
     model_cfg = cfg["model"]
@@ -325,7 +347,8 @@ def _reconstruct_trial_data(
     model_cfg["dropout"]   = trial.params["dropout"]
 
     if csv_mode:
-        us_seed    = trial.params["us_seed"]
+        if us_seed is None:
+            us_seed = trial.params["us_seed"]
         split_seed = trial.params["split_seed"]
         us_idx  = _undersample_indices(all_y[0], seed=us_seed,
                                        keep_neg_mid=keep_neg_mid,
@@ -357,6 +380,8 @@ def scatter_best_trial(
     keep_low_pos: int,
     arch_dir: Path,
     tag: str,
+    latent_dim: int = 4,
+    us_seed: int = None,
 ):
     """Plot val/train/test scatter; save dataset, split indices, y_scaler per arch.
 
@@ -372,13 +397,13 @@ def scatter_best_trial(
     cfg, x_sel, y_sel, df_sel, trial_seed = _reconstruct_trial_data(
         trial, base_cfg, all_x, all_y, all_df, csv_mode,
         keep_neg_mid, keep_neg, keep_low_pos,
+        us_seed=us_seed,
     )
     tr_cfg    = cfg["training"]
     model_cfg = cfg["model"]
     label_col = cfg["data"].get("label_col", "y")
 
-    intermediate = [int(d) for d in hidden_str.split("_")] if hidden_str else []
-    model_cfg["hidden_dims"] = intermediate + [4]
+    model_cfg["hidden_dims"] = _make_hidden_dims(hidden_str, latent_dim)
 
     device = resolve_device(str(tr_cfg.get("device", "auto")))
 
@@ -471,7 +496,19 @@ def make_objective(
     keep_neg_mid: int = 50,
     keep_neg: int = 50,
     keep_low_pos: int = 50,
+    latent_dim: int = 4,
+    us_seed: int = None,
 ):
+    # precompute undersampling once per study when us_seed is fixed
+    if csv_mode and us_seed is not None:
+        _us_idx = _undersample_indices(all_y[0], seed=us_seed,
+                                       keep_neg_mid=keep_neg_mid,
+                                       keep_neg=keep_neg,
+                                       keep_low_pos=keep_low_pos)
+        _x_us  = all_x[0][_us_idx]
+        _y_us  = all_y[0][_us_idx]
+        _df_us = all_df[0].iloc[_us_idx].reset_index(drop=True)
+
     def objective(trial: optuna.Trial) -> float:
         cfg       = copy.deepcopy(base_cfg)
         tr_cfg    = cfg["training"]
@@ -482,26 +519,28 @@ def make_objective(
         tr_cfg["batch_size"]   = trial.suggest_categorical("batch_size", [8, 16, 32, 64])
         model_cfg["dropout"]   = trial.suggest_float("dropout", 0.0, 0.5)
 
-        intermediate = [int(d) for d in hidden_str.split("_")] if hidden_str else []
-        model_cfg["hidden_dims"] = intermediate + [4]
+        model_cfg["hidden_dims"] = _make_hidden_dims(hidden_str, latent_dim)
 
         if csv_mode:
-            us_seed    = trial.suggest_categorical("us_seed",    _SEEDS)
+            if us_seed is not None:
+                x_sel, y_sel, df_sel = _x_us, _y_us, _df_us
+            else:
+                _uid = trial.suggest_categorical("us_seed", _SEEDS)
+                _uidx = _undersample_indices(all_y[0], seed=_uid,
+                                             keep_neg_mid=keep_neg_mid,
+                                             keep_neg=keep_neg,
+                                             keep_low_pos=keep_low_pos)
+                x_sel  = all_x[0][_uidx]
+                y_sel  = all_y[0][_uidx]
+                df_sel = all_df[0].iloc[_uidx].reset_index(drop=True)
             split_seed = trial.suggest_categorical("split_seed", _SEEDS)
-            us_idx  = _undersample_indices(all_y[0], seed=us_seed,
-                                           keep_neg_mid=keep_neg_mid,
-                                           keep_neg=keep_neg,
-                                           keep_low_pos=keep_low_pos)
-            x_sel   = all_x[0][us_idx]
-            y_sel   = all_y[0][us_idx]
-            df_sel  = all_df[0].iloc[us_idx].reset_index(drop=True)
             trial_seed = split_seed
         else:
             x_sel, y_sel, df_sel = all_x[0], all_y[0], all_df[0]
             trial_seed = trial.number
 
         trial_dir  = arch_dir / f"trial_{trial.number}"
-        arch_label = hidden_str + "_4" if hidden_str else "4"
+        arch_label = _make_arch_label(hidden_str, latent_dim)
         val_r2, val_loss, train_r2, test_r2 = run_trial(
             cfg, x_sel, y_sel, df_sel, trial_dir, trial_seed, csv_mode,
             save_artifacts=True, arch_label=arch_label,
@@ -536,6 +575,8 @@ def main():
                         help="Max samples from y in [-10, 0)  (default: 50).")
     parser.add_argument("--keep_low_pos", default=50,   type=int,
                         help="Max samples from y in [0, 10)   (default: 50).")
+    parser.add_argument("--latent_dim",  default=4,     type=int,
+                        help="Latent dimension appended after intermediate layers. 0 = disabled.")
     parser.add_argument("--n_trials",    default=50,    type=int)
     parser.add_argument("--study_name",  default=None,  type=str)
     parser.add_argument("--timeout",     default=None,  type=int, help="seconds")
@@ -585,89 +626,104 @@ def main():
     all_results = []
 
     for hidden_str in _HIDDEN_DIMS_GRID:
-        arch_label = hidden_str + "_4" if hidden_str else "4"
-        arch_dir   = hpo_root / f"arch_{arch_label}"
-        arch_dir.mkdir(parents=True, exist_ok=True)
+        arch_label = _make_arch_label(hidden_str, args.latent_dim)
+        if arch_label == "direct":  # hidden_str="" + latent_dim=0 → empty hidden_dims, skip
+            continue
 
-        study_name = f"{base_study_name}_{arch_label}"
-        storage    = f"sqlite:///{arch_dir}/study.db"
+        us_seed_list = _SEEDS if csv_mode else [None]
 
-        study = optuna.create_study(
-            study_name=study_name,
-            storage=storage,
-            direction="maximize",
-            load_if_exists=True,
-            sampler=optuna.samplers.TPESampler(seed=0),
-        )
+        for us_seed in us_seed_list:
+            if csv_mode:
+                study_dir = hpo_root / f"arch_{arch_label}" / f"us{us_seed}"
+            else:
+                study_dir = hpo_root / f"arch_{arch_label}"
+            study_dir.mkdir(parents=True, exist_ok=True)
 
-        hd = ([int(d) for d in hidden_str.split("_")] if hidden_str else []) + [4]
-        print(f"[arch {arch_label}]  hidden_dims={hd}")
-        study.optimize(
-            make_objective(base_cfg, all_x, all_y, all_df, arch_dir, hidden_str, csv_mode,
-                           keep_neg_mid=args.keep_neg_mid,
-                           keep_neg=args.keep_neg,
-                           keep_low_pos=args.keep_low_pos),
-            n_trials=args.n_trials,
-            timeout=args.timeout,
-        )
+            study_name = f"{base_study_name}_{arch_label}" + (f"_us{us_seed}" if csv_mode else "")
+            storage    = f"sqlite:///{study_dir}/study.db"
 
-        # ── find best by R² and best by val_loss ──────────────────────────
-        best_r2 = study.best_trial
-        completed_with_loss = [
-            t for t in study.trials
-            if t.state == optuna.trial.TrialState.COMPLETE and "val_loss" in t.user_attrs
-        ]
-        best_loss = (
-            min(completed_with_loss, key=lambda t: t.user_attrs["val_loss"])
-            if completed_with_loss else best_r2
-        )
+            study = optuna.create_study(
+                study_name=study_name,
+                storage=storage,
+                direction="maximize",
+                load_if_exists=True,
+                sampler=optuna.samplers.TPESampler(seed=0),
+            )
 
-        best_r2_dir   = arch_dir / f"trial_{best_r2.number}"
-        best_loss_dir = arch_dir / f"trial_{best_loss.number}"
+            seed_tag = f" us_seed={us_seed}" if csv_mode else ""
+            print(f"[arch {arch_label}{seed_tag}]  hidden_dims={_make_hidden_dims(hidden_str, args.latent_dim)}")
+            study.optimize(
+                make_objective(base_cfg, all_x, all_y, all_df, study_dir, hidden_str, csv_mode,
+                               keep_neg_mid=args.keep_neg_mid,
+                               keep_neg=args.keep_neg,
+                               keep_low_pos=args.keep_low_pos,
+                               latent_dim=args.latent_dim,
+                               us_seed=us_seed),
+                n_trials=args.n_trials,
+                timeout=args.timeout,
+            )
 
-        def _fmt(v):
-            return f"{v:.4f}" if v is not None else "N/A"
+            # ── find best by R² and best by val_loss ──────────────────────
+            best_r2 = study.best_trial
+            completed_with_loss = [
+                t for t in study.trials
+                if t.state == optuna.trial.TrialState.COMPLETE and "val_loss" in t.user_attrs
+            ]
+            best_loss = (
+                min(completed_with_loss, key=lambda t: t.user_attrs["val_loss"])
+                if completed_with_loss else best_r2
+            )
 
-        print(
-            f"  → best R²  : trial {best_r2.number:3d}  "
-            f"val_r2={best_r2.value:.4f}  "
-            f"val_loss={_fmt(best_r2.user_attrs.get('val_loss'))}"
-        )
-        print(
-            f"  → best loss: trial {best_loss.number:3d}  "
-            f"val_r2={best_loss.value:.4f}  "
-            f"val_loss={_fmt(best_loss.user_attrs.get('val_loss'))}\n"
-        )
+            best_r2_dir   = study_dir / f"trial_{best_r2.number}"
+            best_loss_dir = study_dir / f"trial_{best_loss.number}"
 
-        common_kw = dict(
-            base_cfg=base_cfg, all_x=all_x, all_y=all_y, all_df=all_df,
-            hidden_str=hidden_str, arch_label=arch_label,
-            csv_mode=csv_mode,
-            keep_neg_mid=args.keep_neg_mid,
-            keep_neg=args.keep_neg,
-            keep_low_pos=args.keep_low_pos,
-            arch_dir=arch_dir,
-        )
-        scatter_best_trial(trial=best_r2,   trial_dir=best_r2_dir,   tag="r2",   **common_kw)
-        scatter_best_trial(trial=best_loss, trial_dir=best_loss_dir, tag="loss", **common_kw)
+            def _fmt(v):
+                return f"{v:.4f}" if v is not None else "N/A"
 
-        all_results.append({
-            "arch": arch_label,
-            "best_r2": {
-                "val_r2":       best_r2.value,
-                "val_loss":     best_r2.user_attrs.get("val_loss"),
-                "params":       best_r2.params,
-                "trial_number": best_r2.number,
-                "trial_dir":    str(best_r2_dir),
-            },
-            "best_loss": {
-                "val_r2":       best_loss.value,
-                "val_loss":     best_loss.user_attrs.get("val_loss"),
-                "params":       best_loss.params,
-                "trial_number": best_loss.number,
-                "trial_dir":    str(best_loss_dir),
-            },
-        })
+            print(
+                f"  → best R²  : trial {best_r2.number:3d}  "
+                f"val_r2={best_r2.value:.4f}  "
+                f"val_loss={_fmt(best_r2.user_attrs.get('val_loss'))}"
+            )
+            print(
+                f"  → best loss: trial {best_loss.number:3d}  "
+                f"val_r2={best_loss.value:.4f}  "
+                f"val_loss={_fmt(best_loss.user_attrs.get('val_loss'))}\n"
+            )
+
+            common_kw = dict(
+                base_cfg=base_cfg, all_x=all_x, all_y=all_y, all_df=all_df,
+                hidden_str=hidden_str, arch_label=arch_label,
+                csv_mode=csv_mode,
+                keep_neg_mid=args.keep_neg_mid,
+                keep_neg=args.keep_neg,
+                keep_low_pos=args.keep_low_pos,
+                arch_dir=study_dir,
+                latent_dim=args.latent_dim,
+                us_seed=us_seed,
+            )
+            scatter_best_trial(trial=best_r2,   trial_dir=best_r2_dir,   tag="r2",   **common_kw)
+            scatter_best_trial(trial=best_loss, trial_dir=best_loss_dir, tag="loss", **common_kw)
+
+            all_results.append({
+                "arch":     arch_label,
+                "us_seed":  us_seed,
+                "study_dir": str(study_dir),
+                "best_r2": {
+                    "val_r2":       best_r2.value,
+                    "val_loss":     best_r2.user_attrs.get("val_loss"),
+                    "params":       best_r2.params,
+                    "trial_number": best_r2.number,
+                    "trial_dir":    str(best_r2_dir),
+                },
+                "best_loss": {
+                    "val_r2":       best_loss.value,
+                    "val_loss":     best_loss.user_attrs.get("val_loss"),
+                    "params":       best_loss.params,
+                    "trial_number": best_loss.number,
+                    "trial_dir":    str(best_loss_dir),
+                },
+            })
 
     # ── global best (by val R²) ────────────────────────────────────────────
     all_results.sort(key=lambda r: r["best_r2"]["val_r2"], reverse=True)
@@ -676,6 +732,8 @@ def main():
 
     print("=== Overall Best (by val R²) ===")
     print(f"  arch     : {top['arch']}")
+    if top.get("us_seed") is not None:
+        print(f"  us_seed  : {top['us_seed']}")
     print(f"  val_r2   : {top_r2['val_r2']:.4f}")
     vl = top_r2["val_loss"]
     if vl is not None:
