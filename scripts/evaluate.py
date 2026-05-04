@@ -108,7 +108,8 @@ def main():
     normalize_y = bool(tr_cfg.get("normalize_y", False))
     if normalize_y and _scaler_path.exists():
         _scaler = load_json(_scaler_path)
-        y_mean, y_std = float(_scaler["mean"]), float(_scaler["std"])
+        y_mean = float(_scaler.get("mean", _scaler.get("y_mean", 0.0)))
+        y_std  = float(_scaler.get("std",  _scaler.get("y_std",  1.0)))
         y_all = (y_all - y_mean) / y_std
         print(f"[evaluate] normalize_y applied: mean={y_mean:.4f} std={y_std:.4f}")
     else:

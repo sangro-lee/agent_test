@@ -307,6 +307,13 @@ def run_trial(
         np.save(trial_dir / "val_idx.npy",   val_idx)
         np.save(trial_dir / "test_idx.npy",  test_idx)
 
+        save_json(trial_dir / "model_config.json", {
+            "hidden_dims": hidden_dims,
+            "input_dim":   int(x_all.shape[1]),
+            "dropout":     float(model_cfg.get("dropout", 0.2)),
+            "activation":  str(model_cfg.get("activation", "relu")),
+            "no_latent_act": bool(model_cfg.get("no_latent_act", False)),
+        })
         plot_scatter(yt_val,   yp_val,
                      title=f"Val — arch {arch_label} {trial_tag}",
                      save_path=trial_dir / "scatter_val.png", label=label_col)
