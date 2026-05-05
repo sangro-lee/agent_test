@@ -174,7 +174,8 @@ def main():
     df = pd.read_csv(run_dir / "cleaned_dataset.csv")
     splits_dir = run_dir / "splits"
     train_idx = load_numpy(splits_dir / "train_idx.npy")
-    y_all = df[cfg["data"]["activity_col"]].astype(float).values
+    _act_col = cfg["data"].get("activity_col", cfg["data"].get("label_col", "pIC50"))
+    y_all = df[_act_col].astype(float).values
     y_train = y_all[train_idx]
 
     # Build per-split pools: {split_name: (z_array, smiles_list, y_lookup)}

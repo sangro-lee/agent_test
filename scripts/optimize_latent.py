@@ -146,7 +146,8 @@ def main():
     train_idx = load_numpy(run_dir / "splits" / "train_idx.npy")
     smiles_all = df[data_cfg["smiles_col"]].astype(str).tolist()
     smiles_train = [smiles_all[i] for i in train_idx]
-    y_all = df[data_cfg["activity_col"]].astype(float).values
+    _act_col = data_cfg.get("activity_col", data_cfg.get("label_col", "pIC50"))
+    y_all = df[_act_col].astype(float).values
     y_train = y_all[train_idx]
 
     z_train = load_numpy(run_dir / "latents_train.npy").astype(np.float32)
