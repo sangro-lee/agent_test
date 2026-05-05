@@ -249,10 +249,12 @@ def main():
         plot_latent_umap(latents, y_true, eval_dir / f"umap_{split_name}.png", split_name=split_name)
 
         # Save latents, SMILES, and y for downstream use (diffusion sampling / screening)
+        # y is always saved in original (unscaled) pIC50 for train_diffusion / sample_cfg compatibility
         np.save(run_dir / f"latents_{split_name}.npy", latents)
         smiles_split = [smiles_all[i] for i in idx]
         np.save(run_dir / f"smiles_{split_name}.npy", np.array(smiles_split, dtype=object))
-        np.save(run_dir / f"y_{split_name}.npy", y_true)
+        y_true_orig = y_true * y_std + y_mean
+        np.save(run_dir / f"y_{split_name}.npy", y_true_orig)
 
         all_latents.append(latents)
         all_y_true.append(y_true)
