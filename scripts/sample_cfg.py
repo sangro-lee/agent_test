@@ -328,6 +328,17 @@ def main():
         z_tensor = torch.tensor(z_samples, dtype=torch.float32, device=device_t)
         with torch.no_grad():
             pred_batch = reg_head(z_tensor).view(-1).cpu().numpy()
+
+        # Denormalize predictions if encoder was trained with normalize_y
+        _scaler_path = Path(run_dir) / "y_scaler.json"
+        if _scaler_path.exists():
+            import json as _json
+            with open(_scaler_path) as _f:
+                _sc = _json.load(_f)
+            _y_mean = float(_sc.get("y_mean", _sc.get("mean", 0.0)))
+            _y_std  = float(_sc.get("y_std",  _sc.get("std",  1.0)))
+            if _y_std > 0.0 and _y_std != 1.0:
+                pred_batch = pred_batch * _y_std + _y_mean
     except Exception as e:
         print(f"[sample_cfg] Warning: could not load encoder for scoring ({e})")
         print("[sample_cfg] Scores set to 0.")
