@@ -37,15 +37,10 @@ from src.utils.io import load_checkpoint
 
 # ── encoder ────────────────────────────────────────────────────────────────
 
-def build_encoder(cfg: dict, device: torch.device):
-    """Build and load encoder. Returns (model, feat_cfg, feature_type, is_graph).
+def build_encoder(run_dir: Path, feature_type: str, model_cfg: dict, feat_cfg: dict,
+                  device: torch.device):
+    """Build and load encoder from run_dir/checkpoints/best.pt.
     Supports feature types: fingerprint, graph (AttentiveFP), sme_graph (SME-RGCN)."""
-    feat_cfg     = cfg["features"]
-    model_cfg    = cfg["model"]
-    feature_type = str(feat_cfg.get("type", "fingerprint")).lower()
-
-    from src.utils.io import resolve_run_dir
-    run_dir = resolve_run_dir(cfg, create_if_missing=False)
 
     if feature_type == "fingerprint":
         probe = smiles_to_fp(
@@ -96,7 +91,7 @@ def build_encoder(cfg: dict, device: torch.device):
 
     load_checkpoint(run_dir / "checkpoints" / "best.pt", model=model, map_location=str(device))
     model.eval()
-    return model, feat_cfg, feature_type, is_graph
+    return model, feature_type, is_graph
 
 
 @torch.no_grad()
@@ -266,7 +261,12 @@ def GB_GA(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config",      required=True)
+    # encoder source: config OR run_dir+feature_type
+    grp = parser.add_mutually_exclusive_group(required=True)
+    grp.add_argument("--config",       help="YAML config path (auto-resolves run_dir)")
+    grp.add_argument("--run_dir",      help="Run dir with checkpoints/best.pt and model_config.json")
+    parser.add_argument("--feature_type", default=None,
+                        help="fingerprint|graph|sme_graph (required when --run_dir used)")
     parser.add_argument("--initpool",    required=True, help="CSV with initial SMILES pool")
     parser.add_argument("--smiles_col",  default="smiles")
     parser.add_argument("--z_samples",   required=True, help="Path to z_samples.npy from sample_cfg.py")
@@ -289,8 +289,22 @@ def main():
                           "mps"  if torch.backends.mps.is_available() else "cpu")
     print(f"[ga_latent] device={device}")
 
-    cfg = load_config(args.config)
-    model, feat_cfg, feature_type, _ = build_encoder(cfg, device)
+    import json
+    if args.config:
+        cfg      = load_config(args.config)
+        feat_cfg = cfg["features"]
+        model_cfg = cfg["model"]
+        feature_type = str(feat_cfg.get("type", "fingerprint")).lower()
+        from src.utils.io import resolve_run_dir
+        run_dir = Path(resolve_run_dir(cfg, create_if_missing=False))
+    else:
+        run_dir = Path(args.run_dir)
+        mc_path = run_dir / "model_config.json"
+        model_cfg = json.loads(mc_path.read_text()) if mc_path.exists() else {}
+        feature_type = args.feature_type or model_cfg.get("feature_type", "fingerprint")
+        feat_cfg = model_cfg  # model_config.json may contain fp_bits etc.
+
+    model, feature_type, _ = build_encoder(run_dir, feature_type, model_cfg, feat_cfg, device)
     print(f"[ga_latent] feature_type={feature_type}")
 
     z_samples = np.load(args.z_samples).astype(np.float32)
