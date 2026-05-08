@@ -154,7 +154,6 @@ def main():
         p_uncond=args.p_uncond,
         model_type=model_type,
         denoiser_type=denoiser_type,
-        unet_dims=unet_dims,
         n_layers=n_layers,
         num_blocks=num_blocks,
         initial_cnot=initial_cnot,
