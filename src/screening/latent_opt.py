@@ -9,7 +9,7 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.models.diffusion import ConditionalDenoisingMLP, DenoisingMLP, NoiseScheduler
-from src.models.vqc_diffusion import AngleVQCDenoiser, BornRuleVQCDenoiser, HybridUNetDenoiser, QubitCondVQCDenoiser
+from src.models.vqc_diffusion import AngleVQCDenoiser, QubitCondVQCDenoiser
 from src.models.vqc_module import VQCConditionalDenoiser
 
 
@@ -174,7 +174,6 @@ def train_diffusion_cfg(
     p_uncond: float = 0.15,     # probability of dropping condition during training
     model_type: str = "mlp",    # "mlp" or "vqc"
     denoiser_type: str = "mlp", # "mlp" | "unet" | "unet_vqc" | "vqc_angle"
-    unet_dims: list | None = None,
     n_layers: int = 2,
     num_blocks: int = 6,        # number of VQC+CondInj blocks for vqc_angle
     initial_cnot:  bool = False,  # fixed CNOT ring after AngleEmbedding
@@ -264,21 +263,6 @@ def train_diffusion_cfg(
             latent_dim=latent_dim,
             n_layers=int(n_layers),
             num_blocks=int(num_blocks),
-        ).to(device_t)
-    elif denoiser_type == "vqc_born_rule":
-        denoiser = BornRuleVQCDenoiser(
-            latent_dim=latent_dim,
-            n_layers=int(n_layers),
-            num_blocks=int(num_blocks),
-        ).to(device_t)
-    elif denoiser_type in ("unet", "unet_vqc"):
-        denoiser = HybridUNetDenoiser(
-            latent_dim=latent_dim,
-            unet_dims=unet_dims,
-            n_layers=int(n_layers),
-            time_dim=int(time_dim),
-            cond_dim=int(cond_dim),
-            use_vqc=(denoiser_type == "unet_vqc"),
         ).to(device_t)
     elif denoiser_type == "mlp_ortho":
         denoiser = ConditionalDenoisingMLP(
