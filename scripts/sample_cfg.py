@@ -102,58 +102,61 @@ def main():
             f"Run train_diffusion.py first."
         )
 
-    ckpt = torch.load(ckpt_path, map_location=device)
+    # Always read metadata (latent_dim, T) — needed even for retrieval_only
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     latent_dim = int(ckpt["latent_dim"])
     T = int(ckpt["T"])
     model_type = ckpt.get("model_type", "mlp")
     denoiser_type = ckpt.get("denoiser_type", model_type)  # fallback for old checkpoints
 
-    if model_type == "vqc":
-        denoiser = VQCConditionalDenoiser(
-            latent_dim=latent_dim,
-            n_qubits=int(ckpt.get("n_qubits", latent_dim)),
-            n_layers=int(ckpt.get("n_layers", 2)),
+    if not args.retrieval_only:
+        # Build and load the full denoiser model (slow for VQC — skipped in retrieval_only)
+        if model_type == "vqc":
+            denoiser = VQCConditionalDenoiser(
+                latent_dim=latent_dim,
+                n_qubits=int(ckpt.get("n_qubits", latent_dim)),
+                n_layers=int(ckpt.get("n_layers", 2)),
+            )
+        elif denoiser_type in ("vqc_angle", "vqc_angle_delta", "vqc_angle_reupload"):
+            denoiser = AngleVQCDenoiser(
+                latent_dim=latent_dim,
+                n_layers=int(ckpt.get("n_layers", 2)),
+                num_blocks=int(ckpt.get("num_blocks", 6)),
+                time_dim=int(ckpt.get("time_dim", 32)),
+                cond_dim=int(ckpt.get("cond_dim", 32)),
+                use_delta=bool(ckpt.get("use_delta", False)),
+                use_reupload=bool(ckpt.get("use_reupload", False)),
+                initial_cnot=bool(ckpt.get("initial_cnot", False)),
+                full_encoding=bool(ckpt.get("full_encoding", False)),
+            )
+        elif denoiser_type == "vqc_qubit_cond":
+            denoiser = QubitCondVQCDenoiser(
+                latent_dim=latent_dim,
+                n_layers=int(ckpt.get("n_layers", 2)),
+                num_blocks=int(ckpt.get("num_blocks", 6)),
+            )
+        elif denoiser_type == "mlp_ortho":
+            denoiser = ConditionalDenoisingMLP(
+                latent_dim=latent_dim,
+                time_dim=int(ckpt["time_dim"]),
+                cond_dim=int(ckpt["cond_dim"]),
+                hidden_dim=int(ckpt.get("hidden_dim", 512)),
+                use_orthogonal=True,
+            )
+        else:
+            denoiser = ConditionalDenoisingMLP(
+                latent_dim=latent_dim,
+                time_dim=int(ckpt["time_dim"]),
+                cond_dim=int(ckpt["cond_dim"]),
+                hidden_dim=int(ckpt.get("hidden_dim", 512)),
+            )
+        denoiser.load_state_dict(ckpt["state_dict"])
+        denoiser.set_normalization(
+            z_mean=torch.tensor(ckpt["z_mean"]),
+            z_std=torch.tensor(ckpt["z_std"]),
+            c_mean=torch.tensor([ckpt["c_mean"]]),
+            c_std=torch.tensor([ckpt["c_std"]]),
         )
-    elif denoiser_type in ("vqc_angle", "vqc_angle_delta", "vqc_angle_reupload"):
-        denoiser = AngleVQCDenoiser(
-            latent_dim=latent_dim,
-            n_layers=int(ckpt.get("n_layers", 2)),
-            num_blocks=int(ckpt.get("num_blocks", 6)),
-            time_dim=int(ckpt.get("time_dim", 32)),
-            cond_dim=int(ckpt.get("cond_dim", 32)),
-            use_delta=bool(ckpt.get("use_delta", False)),
-            use_reupload=bool(ckpt.get("use_reupload", False)),
-            initial_cnot=bool(ckpt.get("initial_cnot", False)),
-            full_encoding=bool(ckpt.get("full_encoding", False)),
-        )
-    elif denoiser_type == "vqc_qubit_cond":
-        denoiser = QubitCondVQCDenoiser(
-            latent_dim=latent_dim,
-            n_layers=int(ckpt.get("n_layers", 2)),
-            num_blocks=int(ckpt.get("num_blocks", 6)),
-        )
-    elif denoiser_type == "mlp_ortho":
-        denoiser = ConditionalDenoisingMLP(
-            latent_dim=latent_dim,
-            time_dim=int(ckpt["time_dim"]),
-            cond_dim=int(ckpt["cond_dim"]),
-            hidden_dim=int(ckpt.get("hidden_dim", 512)),
-            use_orthogonal=True,
-        )
-    else:
-        denoiser = ConditionalDenoisingMLP(
-            latent_dim=latent_dim,
-            time_dim=int(ckpt["time_dim"]),
-            cond_dim=int(ckpt["cond_dim"]),
-            hidden_dim=int(ckpt.get("hidden_dim", 512)),
-        )
-    denoiser.load_state_dict(ckpt["state_dict"])
-    denoiser.set_normalization(
-        z_mean=torch.tensor(ckpt["z_mean"]),
-        z_std=torch.tensor(ckpt["z_std"]),
-        c_mean=torch.tensor([ckpt["c_mean"]]),
-        c_std=torch.tensor([ckpt["c_std"]]),
-    )
 
     # ---- Load latents for nearest-neighbor retrieval (train / val / test) ----
     df = pd.read_csv(run_dir / "cleaned_dataset.csv")
