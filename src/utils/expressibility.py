@@ -290,6 +290,7 @@ def _preprocess_z_for_reupload(
     z: np.ndarray, n_qubits: int, n_layers: int,
     lambda_scales: Optional[np.ndarray] = None,
     input_biases: Optional[np.ndarray] = None,
+    use_tanh: bool = True,
 ) -> np.ndarray:
     """
     Prepare circuit inputs from a latent vector z.
@@ -305,8 +306,9 @@ def _preprocess_z_for_reupload(
     ----------
     lambda_scales : (n_layers, n_qubits) or None
     input_biases  : (n_layers, n_qubits) or None
+    use_tanh      : if False, skip tanh and use z directly (for ablation)
     """
-    z_bounded = np.tanh(z.astype(np.float64))
+    z_bounded = np.tanh(z.astype(np.float64)) if use_tanh else z.astype(np.float64)
     # Take first n_qubits dims (or zero-pad if latent_dim < n_qubits)
     z_q = z_bounded[:n_qubits] if len(z_bounded) >= n_qubits \
         else np.pad(z_bounded, (0, n_qubits - len(z_bounded)))
@@ -447,6 +449,7 @@ def sample_states_vqc_reupload_data_dependent(
     block_idx: int = 0,
     lambda_scales: Optional[np.ndarray] = None,
     input_biases: Optional[np.ndarray] = None,
+    use_tanh: bool = True,
     seed: int = 0,
 ) -> np.ndarray:
     """
@@ -504,7 +507,7 @@ def sample_states_vqc_reupload_data_dependent(
 
         for i, z in enumerate(latents):
             inputs = _preprocess_z_for_reupload(z, n_qubits, n_layers,
-                                                 lambda_scales, input_biases)
+                                                 lambda_scales, input_biases, use_tanh)
             states.append(np.array(circuit(inputs, theta)))
             if (i + 1) % log_every == 0:
                 print(f"  [fixed_theta] {i + 1}/{n}", flush=True)
@@ -513,7 +516,7 @@ def sample_states_vqc_reupload_data_dependent(
         all_theta = sample_vqc_reupload_params(n, n_qubits, n_layers, seed)
         for i, (z, theta) in enumerate(zip(latents, all_theta)):
             inputs = _preprocess_z_for_reupload(z, n_qubits, n_layers,
-                                                 lambda_scales, input_biases)
+                                                 lambda_scales, input_biases, use_tanh)
             states.append(np.array(circuit(inputs, theta)))
             if (i + 1) % log_every == 0:
                 print(f"  [random_theta] {i + 1}/{n}", flush=True)
@@ -674,6 +677,8 @@ def main() -> None:
                         help="Circuit depth per VQC block (n_layers in AngleVQCDenoiser config).")
     parser.add_argument("--initial_cnot",  action="store_true",
                         help="[angle_reupload] Enable initial CNOT ring after first encoding.")
+    parser.add_argument("--no_tanh", action="store_true",
+                        help="[angle_reupload] Skip tanh preprocessing (use z directly).")
     parser.add_argument("--n_samples",     type=int,   default=200)
     parser.add_argument("--n_bins",        type=int,   default=75)
     parser.add_argument("--max_pairs",     type=int,   default=None,
@@ -711,6 +716,7 @@ def main() -> None:
                 initial_cnot=args.initial_cnot,
                 trained_params_path=args.trained_params_path,
                 ckpt_path=args.ckpt_path, block_idx=args.block_idx,
+                use_tanh=not args.no_tanh,
                 seed=args.seed,
             )
 
@@ -794,6 +800,7 @@ def main() -> None:
     if args.vqc_type == "angle_reupload":
         meta["theta_size"]    = _vqc_reupload_theta_size(args.n_qubits, args.n_layers)
         meta["initial_cnot"]  = args.initial_cnot
+        meta["use_tanh"]      = not args.no_tanh
     if args.mode == "data_dependent":
         meta["data_mode"]   = args.data_mode
         meta["latent_path"] = args.latent_path
