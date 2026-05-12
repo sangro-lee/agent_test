@@ -175,7 +175,8 @@ def main():
     parser.add_argument("--block_idx",   type=int, default=0)
     parser.add_argument("--initial_cnot", action="store_true")
     parser.add_argument("--no_tanh",     action="store_true")
-    parser.add_argument("--n_samples",   type=int, default=300)
+    parser.add_argument("--n_samples",   type=int, default=None,
+                        help="Max molecules to use (default: all)")
     parser.add_argument("--max_pairs",   type=int, default=5000)
     parser.add_argument("--seed",        type=int, default=42)
     parser.add_argument("--outdir",      type=str,
@@ -193,7 +194,7 @@ def main():
     assert len(latents) == len(y_all), "latent / y length mismatch"
 
     rng = np.random.default_rng(args.seed)
-    if len(latents) > args.n_samples:
+    if args.n_samples is not None and len(latents) > args.n_samples:
         idx     = rng.choice(len(latents), size=args.n_samples, replace=False)
         latents = latents[idx]
         y_all   = y_all[idx]
