@@ -66,10 +66,10 @@ def load_denoiser(ckpt_path: str) -> tuple[AngleVQCDenoiser, dict]:
     )
     denoiser.load_state_dict(ckpt["state_dict"])
     denoiser.set_normalization(
-        z_mean = ckpt["z_mean"],
-        z_std  = ckpt["z_std"],
-        c_mean = ckpt.get("c_mean", torch.zeros(1)),
-        c_std  = ckpt.get("c_std",  torch.ones(1)),
+        z_mean = torch.as_tensor(ckpt["z_mean"]),
+        z_std  = torch.as_tensor(ckpt["z_std"]),
+        c_mean = torch.as_tensor(ckpt.get("c_mean", torch.zeros(1))),
+        c_std  = torch.as_tensor(ckpt.get("c_std",  torch.ones(1))),
     )
     denoiser.eval()
     return denoiser, ckpt
