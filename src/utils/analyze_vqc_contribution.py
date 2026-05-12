@@ -383,8 +383,41 @@ def main():
                     "state_dist": state_dist,
                 }).to_csv(out_dir / f"pairs_{tag}.csv", index=False)
 
-                blk_metrics["r_sv_cont"] = r_svcont
-                blk_metrics["p_sv_cont"] = p_svcont
+                # ── 1-F ≈ 0 vs ||Δq_out|| consistency check ──────────────────
+                thresh = 0.01
+                near_zero = state_dist < thresh
+                n_nz = int(near_zero.sum())
+                if n_nz > 0:
+                    qout_at_zero = dist_qout[near_zero]
+                    print(f"  [zero-F check] pairs with 1-F<{thresh}: {n_nz}")
+                    print(f"    ||Δq_out||  mean={qout_at_zero.mean():.4f}"
+                          f"  max={qout_at_zero.max():.4f}"
+                          f"  (expected ≈ 0)")
+                    blk_metrics["n_near_zero_F"]       = n_nz
+                    blk_metrics["qout_at_zero_F_mean"] = float(qout_at_zero.mean())
+                    blk_metrics["qout_at_zero_F_max"]  = float(qout_at_zero.max())
+                else:
+                    print(f"  [zero-F check] no pairs with 1-F<{thresh}")
+
+                # ── scatter: 1-F vs ||Δq_out|| ────────────────────────────────
+                fig, ax = plt.subplots(figsize=(6, 5))
+                ax.scatter(state_dist, dist_qout, alpha=0.05, s=4,
+                           color="steelblue", rasterized=True)
+                ax.set_xlabel("1 − F  (quantum distance)", fontsize=11)
+                ax.set_ylabel("||q_out,i − q_out,j||₂", fontsize=11)
+                ax.set_title(f"1-F vs ||Δq_out||  block={blk}  t={t_idx}/{T}",
+                             fontsize=11)
+                r_sv_qout, _ = stats.spearmanr(state_dist, dist_qout)
+                ax.text(0.05, 0.93, f"Spearman r={r_sv_qout:.4f}",
+                        transform=ax.transAxes, fontsize=10)
+                fig.tight_layout()
+                fig.savefig(out_dir / f"sv_vs_qout_{tag}.png", dpi=150)
+                plt.close(fig)
+                print(f"  [sv vs q_out] Spearman r(1-F, ||Δq_out||)={r_sv_qout:.4f}")
+
+                blk_metrics["r_sv_cont"]    = r_svcont
+                blk_metrics["p_sv_cont"]    = p_svcont
+                blk_metrics["r_sv_vs_qout"] = float(r_sv_qout)
 
         all_metrics.append(blk_metrics)
 
