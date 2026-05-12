@@ -662,6 +662,10 @@ def main() -> None:
                         help="[angle_reupload] Denoiser checkpoint .pt to extract trained θ.")
     parser.add_argument("--block_idx", type=int, default=0,
                         help="[angle_reupload] Which VQC block's θ to extract (default: 0).")
+    parser.add_argument("--all_blocks", action="store_true",
+                        help="[angle_reupload] Run all blocks in the checkpoint and compare.")
+    parser.add_argument("--num_blocks", type=int, default=6,
+                        help="[angle_reupload] Number of VQC blocks (used with --all_blocks).")
     parser.add_argument("--trained_params_path", type=str, default=None,
                         help="Pre-saved θ .npy. For generic: shape (n_layers, n_qubits, 2). "
                              "For angle_reupload: flat array of size theta_size.")
