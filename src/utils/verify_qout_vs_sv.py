@@ -34,8 +34,10 @@ def pauli_z_from_state(state: np.ndarray, n_qubits: int) -> np.ndarray:
     probs = np.abs(state) ** 2
     result = []
     for k in range(n_qubits):
-        p0 = sum(probs[j] for j in range(dim) if not (j >> k & 1))
-        p1 = sum(probs[j] for j in range(dim) if     (j >> k & 1))
+        # PennyLane statevector: wire k is bit (n_qubits-1-k) of the index (wire 0 = MSB)
+        bit = n_qubits - 1 - k
+        p0 = sum(probs[j] for j in range(dim) if not (j >> bit & 1))
+        p1 = sum(probs[j] for j in range(dim) if     (j >> bit & 1))
         result.append(p0 - p1)
     return np.array(result)
 
