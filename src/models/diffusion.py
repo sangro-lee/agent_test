@@ -66,23 +66,6 @@ class _CondInj(nn.Module):
         return x + h
 
 
-class _CondInjectionLayer(nn.Module):
-    """
-    Single AdaIN-style condition injection layer (from G2D-Diff paper).
-    x_{l+1} = f2( GELU( w_c * norm(f1(x_l)) + b_c ) )
-    where w_c, b_c = cond2wb(cond)
-    """
-    def __init__(self, hidden_dim: int, cond_embed_dim: int):
-        super().__init__()
-        self.f1 = nn.Linear(hidden_dim, hidden_dim)
-        self.norm = nn.LayerNorm(hidden_dim)
-        self.inj = _CondInj(hidden_dim, cond_embed_dim)
-
-    def forward(self, x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
-        h_norm = self.norm(self.f1(x))
-        return self.inj(x, h_norm, cond)
-
-
 class ConditionalDenoisingMLP(nn.Module):
     """
     Classifier-Free Guidance (CFG) denoising network.
@@ -130,20 +113,23 @@ class ConditionalDenoisingMLP(nn.Module):
         # Input projection: latent → hidden
         self.input_proj = nn.Linear(self.latent_dim, hidden_dim)
 
-        # AdaIN condition injection layers
-        self.layers = nn.ModuleList([
-            _CondInjectionLayer(hidden_dim, cond_embed_dim)
-            for _ in range(self.num_layers)
+        self.f1_layers = nn.ModuleList([
+            nn.Linear(hidden_dim, hidden_dim) for _ in range(self.num_layers)
+        ])
+        self.norms = nn.ModuleList([
+            nn.LayerNorm(hidden_dim) for _ in range(self.num_layers)
+        ])
+        self.cond_layers = nn.ModuleList([
+            _CondInj(hidden_dim, cond_embed_dim) for _ in range(self.num_layers)
         ])
 
         # Output projection: hidden → latent (predict noise)
         self.output_proj = nn.Linear(hidden_dim, self.latent_dim)
 
-        # Apply orthogonal parametrization to f1, f2 in each noise-prediction layer
         if use_orthogonal:
-            for layer in self.layers:
-                orthogonal(layer.f1)
-                orthogonal(layer.f2)
+            for f1, cond_layer in zip(self.f1_layers, self.cond_layers):
+                orthogonal(f1)
+                orthogonal(cond_layer.f2)
 
         self.register_buffer("z_mean", torch.zeros(self.latent_dim), persistent=True)
         self.register_buffer("z_std", torch.ones(self.latent_dim), persistent=True)
@@ -175,8 +161,9 @@ class ConditionalDenoisingMLP(nn.Module):
         cond = torch.cat([t_embed, c_embed], dim=-1)      # (B, time_dim+cond_dim)
 
         x = self.input_proj(z_t)                          # (B, hidden_dim)
-        for layer in self.layers:
-            x = layer(x, cond)                            # 조건이 매 레이어마다 주입
+        for f1, norm, cond_layer in zip(self.f1_layers, self.norms, self.cond_layers):
+            h_norm = norm(f1(x))
+            x = cond_layer(x, h_norm, cond)
         return self.output_proj(x)                        # (B, latent_dim)
 
 

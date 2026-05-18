@@ -323,12 +323,12 @@ class AngleVQCDenoiser(nn.Module):
                     scaled = self.lambda_scales[i] * x_enc.unsqueeze(1) + self.input_biases[i]
                 inp = scaled.reshape(x.shape[0], -1)                # (B, n_layers * n_qubits)
                 q_out = vqc(inp.cpu().double()).to(x.device).float()
-                q_out = self.output_scales[i] * norm(q_out)         # VQC output = h_norm for CondInj
+                q_out = norm(self.output_scales[i] * q_out)         # Skolik scaling → norm (matches MLP: f1 → norm)
             else:
                 q_out = vqc(x_enc.cpu().double()).to(x.device).float()
                 if self.use_delta:
                     d1, d2 = self.deltas1[i], self.deltas2[i]
-                    q_out = d1 * norm(q_out) + d2
+                    q_out = norm(d1 * q_out + d2)
                 else:
                     q_out = norm(q_out)
             x = cond_layer(x, q_out, cond)                # _CondInj: x + f2(gelu(w*q_out+b))
