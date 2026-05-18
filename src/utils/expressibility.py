@@ -387,6 +387,145 @@ def sample_vqc_reupload_params(
     return np.random.default_rng(seed).uniform(0.0, 2 * np.pi, size=(n_samples, theta_size))
 
 
+# ══ VQC zz_reupload (ZZ-FeatureMap + same ansatz as angle_reupload) ══════════
+
+def make_vqc_zz_reupload_qnode(
+    n_qubits: int,
+    n_layers: int,
+    initial_cnot: bool = False,
+    use_data: bool = True,
+):
+    """
+    Build a statevector QNode with ZZ-FeatureMap re-uploading.
+
+    ZZ-FeatureMap per layer:
+      H on all qubits → RZ(2·x_i·π) per qubit → CNOT-RZ(2·(π-x_i·π)(π-x_j·π))-CNOT per pair
+    Ansatz: same RZ-RY-RZ + ring entanglement as angle_reupload.
+
+    use_data=True  : circuit(inputs, theta)  — inputs: (n_layers*n_qubits,)
+    use_data=False : circuit(theta)          — pure variational, no data encoding
+    """
+    dev = build_device(n_qubits)
+    _pi = math.pi
+
+    def _zz_body(inputs_or_none, theta):
+        param_idx = 0
+        for l in range(n_layers):
+            if inputs_or_none is not None:
+                x_l = inputs_or_none[l * n_qubits : (l + 1) * n_qubits]
+                for i in range(n_qubits):
+                    qml.Hadamard(wires=i)
+                for i in range(n_qubits):
+                    qml.RZ(2.0 * float(x_l[i]) * _pi, wires=i)
+                for i in range(n_qubits - 1):
+                    qml.CNOT(wires=[i, i + 1])
+                    qml.RZ(2.0 * (_pi - float(x_l[i]) * _pi) * (_pi - float(x_l[i + 1]) * _pi), wires=i + 1)
+                    qml.CNOT(wires=[i, i + 1])
+            if initial_cnot and l == 0:
+                for j in range(n_qubits):
+                    qml.CNOT(wires=[j, (j + 1) % n_qubits])
+            for i in range(n_qubits):
+                qml.RZ(theta[param_idx],     wires=i)
+                qml.RY(theta[param_idx + 1], wires=i)
+                qml.RZ(theta[param_idx + 2], wires=i)
+                param_idx += 3
+            for p in range(n_qubits):
+                nxt = (p + 1) % n_qubits
+                qml.RZ(-_pi / 2,             wires=nxt)
+                qml.CNOT(wires=[nxt, p])
+                qml.RZ(theta[param_idx],     wires=p)
+                qml.RY(theta[param_idx + 1], wires=nxt)
+                qml.CNOT(wires=[p, nxt])
+                qml.RY(theta[param_idx + 2], wires=nxt)
+                param_idx += 3
+
+    if use_data:
+        @qml.qnode(dev, interface="numpy")
+        def circuit(inputs, theta):
+            _zz_body(inputs, theta)
+            return qml.state()
+    else:
+        @qml.qnode(dev, interface="numpy")
+        def circuit(theta):
+            _zz_body(None, theta)
+            return qml.state()
+
+    return circuit
+
+
+def sample_states_vqc_zz_reupload_circuit_only(
+    n_qubits: int,
+    n_layers: int,
+    n_samples: int,
+    initial_cnot: bool = False,
+    seed: int = 0,
+) -> np.ndarray:
+    """circuit_only for vqc_zz_reupload: vary θ only, no data encoding."""
+    circuit = make_vqc_zz_reupload_qnode(n_qubits, n_layers, initial_cnot, use_data=False)
+    all_theta = sample_vqc_reupload_params(n_samples, n_qubits, n_layers, seed)
+    states, log_every = [], max(1, n_samples // 10)
+    for i, theta in enumerate(all_theta):
+        states.append(np.array(circuit(theta)))
+        if (i + 1) % log_every == 0:
+            print(f"  [vqc_zz circuit_only] {i + 1}/{n_samples}", flush=True)
+    return np.stack(states, axis=0)
+
+
+def sample_states_vqc_zz_reupload_data_dependent(
+    latent_path: str,
+    n_qubits: int,
+    n_layers: int,
+    data_mode: str,
+    n_samples: int,
+    initial_cnot: bool = False,
+    ckpt_path: Optional[str] = None,
+    block_idx: int = 0,
+    lambda_scales: Optional[np.ndarray] = None,
+    input_biases: Optional[np.ndarray] = None,
+    use_tanh: bool = True,
+    seed: int = 0,
+) -> np.ndarray:
+    """data_dependent for vqc_zz_reupload. Same preprocessing as angle_reupload."""
+    p = Path(latent_path)
+    latents = np.load(latent_path).astype(np.float64) if p.suffix == ".npy" \
+        else pd.read_csv(latent_path).values.astype(np.float64)
+
+    rng = np.random.default_rng(seed)
+    if len(latents) > n_samples:
+        latents = latents[rng.choice(len(latents), size=n_samples, replace=False)]
+    n = len(latents)
+    print(f"  [vqc_zz data_dep] {n} latent vectors  shape={latents.shape}")
+
+    circuit = make_vqc_zz_reupload_qnode(n_qubits, n_layers, initial_cnot, use_data=True)
+    log_every = max(1, n // 10)
+    states = []
+
+    if data_mode == "fixed_theta":
+        if ckpt_path is not None:
+            theta = extract_vqc_theta_from_ckpt(ckpt_path, block_idx)
+        else:
+            theta = rng.uniform(0.0, 2 * np.pi, _vqc_reupload_theta_size(n_qubits, n_layers))
+            print(f"  [fixed_theta] random θ (seed={seed})")
+        for i, z in enumerate(latents):
+            inputs = _preprocess_z_for_reupload(z, n_qubits, n_layers,
+                                                 lambda_scales, input_biases, use_tanh)
+            states.append(np.array(circuit(inputs, theta)))
+            if (i + 1) % log_every == 0:
+                print(f"  [fixed_theta] {i + 1}/{n}", flush=True)
+    elif data_mode == "random_theta":
+        all_theta = sample_vqc_reupload_params(n, n_qubits, n_layers, seed)
+        for i, (z, theta) in enumerate(zip(latents, all_theta)):
+            inputs = _preprocess_z_for_reupload(z, n_qubits, n_layers,
+                                                 lambda_scales, input_biases, use_tanh)
+            states.append(np.array(circuit(inputs, theta)))
+            if (i + 1) % log_every == 0:
+                print(f"  [random_theta] {i + 1}/{n}", flush=True)
+    else:
+        raise ValueError(f"Unknown data_mode: {data_mode!r}")
+
+    return np.stack(states, axis=0)
+
+
 def extract_vqc_theta_from_ckpt(ckpt_path: str, block_idx: int = 0) -> np.ndarray:
     """
     Extract trained theta for one VQC block from an AngleVQCDenoiser checkpoint.
@@ -647,9 +786,10 @@ def main() -> None:
     parser.add_argument("--mode", required=True,
                         choices=["circuit_only", "data_dependent"])
     parser.add_argument("--vqc_type", default="generic",
-                        choices=["generic", "angle_reupload"],
+                        choices=["generic", "angle_reupload", "zz_reupload"],
                         help="'generic': simple RY+RZ+CNOT ansatz.  "
-                             "'angle_reupload': exact circuit from AngleVQCDenoiser.")
+                             "'angle_reupload': AngleEmbedding re-uploading from AngleVQCDenoiser.  "
+                             "'zz_reupload': ZZ-FeatureMap re-uploading (same ansatz as angle_reupload).")
 
     # ── Data-dependent options ────────────────────────────────────────────────
     parser.add_argument("--latent_path", type=str, default=None,
@@ -719,6 +859,29 @@ def main() -> None:
                 data_mode=args.data_mode, n_samples=args.n_samples,
                 initial_cnot=args.initial_cnot,
                 trained_params_path=args.trained_params_path,
+                ckpt_path=args.ckpt_path, block_idx=args.block_idx,
+                use_tanh=not args.no_tanh,
+                seed=args.seed,
+            )
+
+    elif args.vqc_type == "zz_reupload":
+        theta_size = _vqc_reupload_theta_size(args.n_qubits, args.n_layers)
+        print(f"  theta_size={theta_size}  initial_cnot={args.initial_cnot}")
+
+        if args.mode == "circuit_only":
+            states = sample_states_vqc_zz_reupload_circuit_only(
+                n_qubits=args.n_qubits, n_layers=args.n_layers,
+                n_samples=args.n_samples, initial_cnot=args.initial_cnot, seed=args.seed,
+            )
+        else:
+            if args.latent_path is None:
+                parser.error("--latent_path required for data_dependent mode.")
+            print(f"  latent_path={args.latent_path}")
+            states = sample_states_vqc_zz_reupload_data_dependent(
+                latent_path=args.latent_path,
+                n_qubits=args.n_qubits, n_layers=args.n_layers,
+                data_mode=args.data_mode, n_samples=args.n_samples,
+                initial_cnot=args.initial_cnot,
                 ckpt_path=args.ckpt_path, block_idx=args.block_idx,
                 use_tanh=not args.no_tanh,
                 seed=args.seed,

@@ -3,6 +3,7 @@ VQC denoisers for latent CFG diffusion.
 
 Classes:
     AngleVQCDenoiser    — num_blocks × [AngleVQC + CondInj] with tanh input bounding
+                          Supports angle_reupload (AngleEmbedding) and zz_reupload (ZZ-FeatureMap)
     QubitCondVQCDenoiser — quantum-native conditioning via dedicated ancilla qubits
 """
 from __future__ import annotations
@@ -49,6 +50,62 @@ def _make_reupload_vqc_layer(
                 qml.RZ(theta[param_idx + 2], wires=i)
                 param_idx += 3
             # Ring entanglement
+            for p in range(n_qubits):
+                nxt = (p + 1) % n_qubits
+                qml.RZ(-_pi / 2,             wires=nxt)
+                qml.CNOT(wires=[nxt, p])
+                qml.RZ(theta[param_idx],     wires=p)
+                qml.RY(theta[param_idx + 1], wires=nxt)
+                qml.CNOT(wires=[p, nxt])
+                qml.RY(theta[param_idx + 2], wires=nxt)
+                param_idx += 3
+        return [qml.expval(qml.PauliZ(i)) for i in range(n_qubits)]
+
+    return qml.qnn.TorchLayer(vqc_circuit, weight_shapes)
+
+
+def _make_zz_reupload_vqc_layer(
+    n_qubits: int,
+    n_layers: int,
+    device_type: str,
+    initial_cnot: bool = False,
+) -> "qml.qnn.TorchLayer":
+    """Factory for ZZ-FeatureMap data re-uploading VQC blocks.
+
+    Replaces AngleEmbedding with ZZ-FeatureMap per re-uploading layer:
+      H on all qubits → RZ(2·x_i·π) per qubit → CNOT-RZ(2·(π-x_i·π)(π-x_j·π))-CNOT per pair
+    inputs shape: (n_layers * n_qubits,) — pre-scaled by lambda_scales outside the qnode.
+    Ansatz (variational rotations + ring entanglement) is identical to angle_reupload.
+    """
+    _pi = math.pi
+    dev = qml.device(device_type, wires=n_qubits)
+    params_per_layer = n_qubits * 3 + n_qubits * 3
+    weight_shapes = {"theta": (params_per_layer * n_layers,)}
+
+    @qml.qnode(dev, interface="torch", diff_method="backprop")
+    def vqc_circuit(inputs, theta):
+        param_idx = 0
+        for l in range(n_layers):
+            x_l = inputs[..., l * n_qubits : (l + 1) * n_qubits]
+            # ZZ-FeatureMap
+            for i in range(n_qubits):
+                qml.Hadamard(wires=i)
+            for i in range(n_qubits):
+                qml.RZ(2.0 * x_l[..., i] * _pi, wires=i)
+            for i in range(n_qubits - 1):
+                qml.CNOT(wires=[i, i + 1])
+                qml.RZ(2.0 * (_pi - x_l[..., i] * _pi) * (_pi - x_l[..., i + 1] * _pi), wires=i + 1)
+                qml.CNOT(wires=[i, i + 1])
+            if initial_cnot and l == 0:
+                for j in range(n_qubits):
+                    qml.CNOT(wires=[j, (j + 1) % n_qubits])
+            # Variational rotations (same as angle_reupload)
+            for i in range(n_qubits):
+                qml.RZ(theta[param_idx],     wires=i)
+                qml.RY(theta[param_idx + 1], wires=i)
+                qml.RZ(theta[param_idx + 2], wires=i)
+                param_idx += 3
+            # Ring entanglement (same as angle_reupload)
             for p in range(n_qubits):
                 nxt = (p + 1) % n_qubits
                 qml.RZ(-_pi / 2,             wires=nxt)
@@ -132,6 +189,7 @@ class AngleVQCDenoiser(nn.Module):
         use_reupload:  bool = False,  # data re-uploading: encode x at start of every layer
         initial_cnot:  bool = False,  # fixed CNOT ring after initial AngleEmbedding
         full_encoding: bool = False,  # full matrix W@x encoding instead of diagonal λ*x
+        use_zz:        bool = False,  # ZZ-FeatureMap instead of AngleEmbedding (requires use_reupload)
     ):
         super().__init__()
         self.latent_dim    = int(latent_dim)
@@ -143,6 +201,7 @@ class AngleVQCDenoiser(nn.Module):
         self.use_reupload  = bool(use_reupload)
         self.initial_cnot  = bool(initial_cnot)
         self.full_encoding = bool(full_encoding) and bool(use_reupload)
+        self.use_zz        = bool(use_zz) and bool(use_reupload)
 
         n_qubits       = self.latent_dim
         cond_embed_dim = time_dim + cond_dim
@@ -156,7 +215,12 @@ class AngleVQCDenoiser(nn.Module):
         )
 
         # ── num_blocks independent VQC circuits ──────────────────────────
-        if use_reupload:
+        if use_reupload and self.use_zz:
+            self.vqc_blocks = nn.ModuleList([
+                _make_zz_reupload_vqc_layer(n_qubits, int(n_layers), device_type, initial_cnot=initial_cnot)
+                for _ in range(num_blocks)
+            ])
+        elif use_reupload:
             self.vqc_blocks = nn.ModuleList([
                 _make_reupload_vqc_layer(n_qubits, int(n_layers), device_type, initial_cnot=initial_cnot)
                 for _ in range(num_blocks)

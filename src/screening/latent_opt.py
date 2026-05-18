@@ -246,7 +246,7 @@ def train_diffusion_cfg(
             latent_dim=latent_dim,
             n_qubits=latent_dim,
         ).to(device_t)
-    elif denoiser_type in ("vqc_angle", "vqc_angle_delta", "vqc_angle_reupload"):
+    elif denoiser_type in ("vqc_angle", "vqc_angle_delta", "vqc_angle_reupload", "vqc_zz_reupload"):
         denoiser = AngleVQCDenoiser(
             latent_dim=latent_dim,
             n_layers=int(n_layers),
@@ -254,9 +254,10 @@ def train_diffusion_cfg(
             time_dim=int(time_dim),
             cond_dim=int(cond_dim),
             use_delta=(denoiser_type == "vqc_angle_delta"),
-            use_reupload=(denoiser_type == "vqc_angle_reupload"),
+            use_reupload=(denoiser_type in ("vqc_angle_reupload", "vqc_zz_reupload")),
             initial_cnot=initial_cnot,
             full_encoding=full_encoding,
+            use_zz=(denoiser_type == "vqc_zz_reupload"),
         ).to(device_t)
     elif denoiser_type == "vqc_qubit_cond":
         denoiser = QubitCondVQCDenoiser(

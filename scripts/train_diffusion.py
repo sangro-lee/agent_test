@@ -42,8 +42,8 @@ def _extra_args(parser):
     parser.add_argument("--use_vqc",       action="store_true",
                         help="(legacy) Use VQCConditionalDenoiser instead of MLP (requires 8-dim latents)")
     parser.add_argument("--denoiser_type", type=str, default="mlp",
-                        choices=["mlp", "mlp_ortho", "unet", "unet_vqc", "vqc_angle", "vqc_angle_delta", "vqc_angle_reupload", "vqc_qubit_cond", "vqc_born_rule"],
-                        help="Denoiser architecture: mlp | mlp_ortho | unet | unet_vqc | vqc_angle | vqc_angle_delta | vqc_angle_reupload | vqc_qubit_cond | vqc_born_rule")
+                        choices=["mlp", "mlp_ortho", "unet", "unet_vqc", "vqc_angle", "vqc_angle_delta", "vqc_angle_reupload", "vqc_zz_reupload", "vqc_qubit_cond", "vqc_born_rule"],
+                        help="Denoiser architecture: mlp | mlp_ortho | unet | unet_vqc | vqc_angle | vqc_angle_delta | vqc_angle_reupload | vqc_zz_reupload | vqc_qubit_cond | vqc_born_rule")
     parser.add_argument("--unet_dims",     type=str, default="",
                         help="Comma-separated U-Net hidden dims, e.g. '256,128,64' (default: auto)")
     parser.add_argument("--n_layers",      type=int, default=2,
@@ -135,6 +135,7 @@ def main():
         "unet_dims": unet_dims,
         "initial_cnot": initial_cnot,
         "full_encoding": full_encoding,
+        "use_zz": (denoiser_type == "vqc_zz_reupload"),
     }
 
     # ---- Train CFG denoiser -----------------------------------------------
@@ -182,13 +183,14 @@ def main():
         if model_type == "vqc":
             ckpt["n_qubits"] = denoiser.n_qubits
             ckpt["n_layers"] = denoiser.n_layers
-        elif denoiser_type in ("vqc_angle", "vqc_angle_delta", "vqc_angle_reupload"):
+        elif denoiser_type in ("vqc_angle", "vqc_angle_delta", "vqc_angle_reupload", "vqc_zz_reupload"):
             ckpt["n_layers"]    = denoiser.n_layers
             ckpt["num_blocks"]  = denoiser.num_blocks
             ckpt["use_delta"]    = denoiser.use_delta
             ckpt["use_reupload"] = denoiser.use_reupload
             ckpt["initial_cnot"]  = denoiser.initial_cnot
             ckpt["full_encoding"] = denoiser.full_encoding
+            ckpt["use_zz"]       = denoiser.use_zz
             ckpt["time_dim"]     = time_dim
             ckpt["cond_dim"]    = cond_dim
         elif denoiser_type == "vqc_qubit_cond":

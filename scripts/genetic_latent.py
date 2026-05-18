@@ -1,22 +1,24 @@
 #!/usr/bin/env python
 """
-GB-GA with latent-space KDE fitness.
+GB-GA with per-sample latent-space fitness (Hungarian assignment).
 
-Fitness = KDE log-density of encode(mol) under the distribution of
-diffusion-sampled latent vectors (z_samples).
+Each molecule slot is assigned 1:1 to a z_sample via the Hungarian algorithm.
+Each slot independently evolves toward its assigned z_target via crossover/mutation.
+
+Fitness per slot = -||encode(mol) - z_target||²
 
 Usage:
   python scripts/genetic_latent.py \
-      --config    configs/experiments/mlp_random.yaml \
-      --initpool  data/initpool.csv \
+      --config    configs/experiments/rgcn_mlp_z4_random.yaml \
+      --initpool  data/BACE1/bace1_clean_pic50.csv \
       --z_samples outputs/runs/MY_RUN/diffusion/.../z_samples.npy \
       --smiles_col smiles \
-      --nstep 10 \
-      --target_pool 400 \
+      --nstep 20 \
+      --n_candidates 5 \
       --out_dir outputs/ga_latent
 """
 import argparse
-import os
+import json
 import random
 import shutil
 import time
@@ -24,9 +26,10 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from rdkit import Chem, DataStructs
+from rdkit import Chem
 from rdkit.Chem import AllChem
-from sklearn.neighbors import KernelDensity
+from scipy.optimize import linear_sum_assignment
+from scipy.spatial.distance import cdist
 
 import crossover as co
 from src.features.fingerprints import smiles_to_fp
@@ -39,9 +42,6 @@ from src.utils.io import load_checkpoint
 
 def build_encoder(run_dir: Path, feature_type: str, model_cfg: dict, feat_cfg: dict,
                   device: torch.device):
-    """Build and load encoder from run_dir/checkpoints/best.pt.
-    Supports feature types: fingerprint, graph (AttentiveFP), sme_graph (SME-RGCN)."""
-
     if feature_type == "fingerprint":
         probe = smiles_to_fp(
             ["CCO"],
@@ -124,161 +124,185 @@ def encode(smiles_list: list, model, feat_cfg: dict,
         return np.concatenate(zs, axis=0)
 
 
-# ── KDE fitness ────────────────────────────────────────────────────────────
+# ── Hungarian assignment ───────────────────────────────────────────────────
 
-def build_kde(z_samples: np.ndarray, bandwidth: str | float = "scott") -> KernelDensity:
-    """Fit KDE on z_samples. bandwidth='scott' uses Scott's rule (auto)."""
-    kde = KernelDensity(kernel="gaussian", bandwidth=bandwidth)
-    kde.fit(z_samples)
-    return kde
+def hungarian_assign(initpool: list, z_samples: np.ndarray,
+                     model, feat_cfg: dict, feature_type: str,
+                     device: torch.device):
+    """
+    Encode initpool molecules and assign 1:1 to z_samples via Hungarian algorithm.
+    If initpool is smaller than z_samples, samples with replacement to fill the gap.
+    Returns (pool, assignment) where assignment[i] = z_sample index for slot i.
+    """
+    N = len(z_samples)
+
+    if len(initpool) >= N:
+        pool = random.sample(initpool, N)
+    else:
+        pool = list(initpool) + random.choices(initpool, k=N - len(initpool))
+
+    print(f"[ga_latent] encoding {N} initpool molecules for Hungarian assignment...")
+    z_init = encode(pool, model, feat_cfg, feature_type, device)  # (N, D)
+
+    cost = cdist(z_init, z_samples, metric="sqeuclidean")  # (N, N)
+    row_ind, col_ind = linear_sum_assignment(cost)
+    # col_ind[i] = z_sample index assigned to slot i
+    assignment = col_ind
+
+    mean_l2 = float(np.mean(np.sqrt(cost[row_ind, col_ind])))
+    print(f"[ga_latent] Hungarian done. initial mean_L2={mean_l2:.4f}")
+
+    return pool, assignment
 
 
-def fitness_kde(smiles_list: list, model, feat_cfg: dict, feature_type: str,
-                kde: KernelDensity, device: torch.device) -> np.ndarray:
-    """Return KDE log-density for each SMILES (higher = better)."""
-    valid, indices = [], []
-    for i, smi in enumerate(smiles_list):
+# ── per-slot distance ──────────────────────────────────────────────────────
+
+def compute_dists(pool: list, assignment: np.ndarray, z_samples: np.ndarray,
+                  model, feat_cfg: dict, feature_type: str,
+                  device: torch.device) -> np.ndarray:
+    """Returns squared L2 distance to assigned z_target for each slot."""
+    N = len(pool)
+    dists = np.full(N, 1e9, dtype=np.float32)
+
+    valid_smiles, valid_idx = [], []
+    for i, smi in enumerate(pool):
         if Chem.MolFromSmiles(smi) is not None:
-            valid.append(smi)
-            indices.append(i)
+            valid_smiles.append(smi)
+            valid_idx.append(i)
 
-    scores = np.full(len(smiles_list), -1e9)
-    if not valid:
-        return scores
+    if not valid_smiles:
+        return dists
 
-    z = encode(valid, model, feat_cfg, feature_type, device)
-    log_dens = kde.score_samples(z)
-    for i, idx in enumerate(indices):
-        scores[idx] = float(log_dens[i])
-    return scores
+    z = encode(valid_smiles, model, feat_cfg, feature_type, device)
+    z_targets = z_samples[assignment[valid_idx]]
+    sq = np.sum((z - z_targets) ** 2, axis=1)
+    for k, i in enumerate(valid_idx):
+        dists[i] = float(sq[k])
+
+    return dists
 
 
-# ── GB-GA cycle ────────────────────────────────────────────────────────────
+# ── per-sample GB-GA step ──────────────────────────────────────────────────
 
-def GB_GA(
-    model, feat_cfg, feature_type, kde, device,
-    GenPool, istep,
-    gau_sigma, target_pool, rxn_list, mu_prob,
+def GB_GA_per_sample(
+    model, feat_cfg: dict, feature_type: str, device: torch.device,
+    pool: list, assignment: np.ndarray, z_samples: np.ndarray,
+    current_dists: np.ndarray,
+    istep: int, n_candidates: int, rxn_list: list, mu_prob: float,
     out_dir: Path,
 ):
-    scores = fitness_kde(GenPool, model, feat_cfg, feature_type, kde, device)
+    """
+    One GA step: each slot generates n_candidates via crossover/mutation,
+    batch-encodes them, and replaces its current molecule if a candidate
+    is closer to the assigned z_target.
+    """
+    N = len(pool)
+    z_targets = z_samples[assignment]  # (N, D)
 
-    sort_a = sorted(scores)
-    cut = sort_a[int(len(sort_a) * 0.2)] if sort_a else -1e9
+    new_pool = list(pool)
+    new_dists = current_dists.copy()
 
-    x_parents1 = []
-    mol_list   = []
+    # generate candidates for each slot
+    all_slot_idx: list[int] = []
+    all_cand_smis: list[str] = []
 
-    if istep == 0:
-        x_parents1 = list(GenPool)
-    else:
-        for imol, smi in enumerate(GenPool):
-            target = np.random.normal(0.0, gau_sigma)   # noise around 0 in log-density space
-            diff   = abs(target - scores[imol])
-            if diff < (cut - sort_a[0]):                 # closer to best density → keep
-                x_parents1.append(smi)
-                mol_list.append(scores[imol])
-            elif random.random() >= 0.8:
-                x_parents1.append(smi)
-
-        log_msg = "\n".join(
-            f"  {smi}  score={scores[i]:.4f}"
-            for i, smi in enumerate(GenPool) if scores[i] >= cut
-        )
-        (out_dir / f"INDEX_{istep}.dat").write_text(log_msg)
-
-    mean_val = float(np.mean(mol_list)) if mol_list else float("nan")
-    std_val  = float(np.std(mol_list))  if mol_list else float("nan")
-
-    # ── Crossover & Mutation ───────────────────────────────────────────────
-    x_parents2 = []
-    ncross, nmut = 0, 0
-    need_offspring = max(0, target_pool - len(x_parents1))
-
-    while ncross < need_offspring:
-        p1 = Chem.MolFromSmiles(random.choice(x_parents1))
-        p2 = Chem.MolFromSmiles(random.choice(x_parents1))
-        child = co.crossover(p1, p2)
-        if child is None:
+    for i in range(N):
+        p_main = Chem.MolFromSmiles(pool[i])
+        if p_main is None:
             continue
 
-        l_mut = False
-        if random.random() < mu_prob:
-            l_mut = True
-            candidates = []
-            for rxn_sma in rxn_list:
-                rxn = AllChem.ReactionFromSmarts(rxn_sma)
-                for mols in rxn.RunReactants((child,)):
-                    candidates.append(mols[0])
-            if not candidates:
+        generated = 0
+        attempts = 0
+        while generated < n_candidates and attempts < n_candidates * 10:
+            attempts += 1
+
+            p2 = Chem.MolFromSmiles(random.choice(pool))
+            if p2 is None:
                 continue
-            child = np.random.choice(candidates)
 
-        child = Chem.MolFromSmiles(Chem.MolToSmiles(child), sanitize=True)
-        if child is None:
-            continue
+            child = co.crossover(p_main, p2)
+            if child is None:
+                continue
 
-        cano = Chem.MolToSmiles(child, True)
-        child_fp = AllChem.GetMorganFingerprintAsBitVect(child, 3, 2048)
-
-        # similarity dedup (relaxes over steps)
-        sim_thresh = max(0.5, 0.8 - istep * 0.01)
-        too_similar = False
-        for pool in (x_parents1, x_parents2):
-            for smi in pool:
-                m = Chem.MolFromSmiles(smi)
-                if m is None:
+            if random.random() < mu_prob:
+                cands_mut = []
+                for rxn_sma in rxn_list:
+                    rxn = AllChem.ReactionFromSmarts(rxn_sma)
+                    try:
+                        for mols in rxn.RunReactants((child,)):
+                            if mols:
+                                cands_mut.append(mols[0])
+                    except Exception:
+                        continue
+                if not cands_mut:
                     continue
-                fp = AllChem.GetMorganFingerprintAsBitVect(m, 3, 2048)
-                if DataStructs.TanimotoSimilarity(child_fp, fp) > sim_thresh:
-                    too_similar = True
-                    break
-            if too_similar:
-                break
-        if too_similar:
-            continue
+                child = np.random.choice(cands_mut)
 
-        ncross += 1
-        if l_mut:
-            nmut += 1
-        x_parents2.append(cano)
+            try:
+                child_mol = Chem.MolFromSmiles(Chem.MolToSmiles(child), sanitize=True)
+            except Exception:
+                continue
+            if child_mol is None:
+                continue
 
-    GenPool = list(dict.fromkeys(
-        Chem.MolToSmiles(Chem.MolFromSmiles(s), True)
-        for s in x_parents1 + x_parents2
-        if Chem.MolFromSmiles(s) is not None
-    ))
+            cano = Chem.MolToSmiles(child_mol, True)
+            all_slot_idx.append(i)
+            all_cand_smis.append(cano)
+            generated += 1
 
-    if istep != 0:
-        print(f"{istep+1:6d}  cut={cut:.4f}  mean={mean_val:.4f}  std={std_val:.4f}"
-              f"  pool={len(GenPool)} ({len(x_parents1)}+{len(x_parents2)})"
-              f"  cross={ncross}  mut={nmut}", flush=True)
+    # batch encode all candidates and update slots
+    if all_cand_smis:
+        z_cands = encode(all_cand_smis, model, feat_cfg, feature_type, device)
 
-    return GenPool
+        for k, (i, smi) in enumerate(zip(all_slot_idx, all_cand_smis)):
+            dist = float(np.sum((z_cands[k] - z_targets[i]) ** 2))
+            if dist < new_dists[i]:
+                new_dists[i] = dist
+                new_pool[i] = smi
+
+    n_improved = int(np.sum(new_dists < current_dists))
+    mean_l2 = float(np.mean(np.sqrt(new_dists)))
+
+    print(f"step {istep+1:4d}  improved={n_improved}/{N}  mean_L2={mean_l2:.4f}  "
+          f"n_cands={len(all_cand_smis)}", flush=True)
+
+    if out_dir is not None:
+        order = np.argsort(new_dists)
+        lines = [
+            f"slot={i}  z_idx={assignment[i]}  L2={np.sqrt(new_dists[i]):.4f}  smi={new_pool[i]}"
+            for i in order[:50]
+        ]
+        (out_dir / f"INDEX_{istep+1}.dat").write_text("\n".join(lines))
+
+    return new_pool, new_dists
 
 
 # ── main ───────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser()
-    # encoder source: config OR run_dir+feature_type
+    parser = argparse.ArgumentParser(
+        description="GB-GA with per-sample latent fitness (Hungarian assignment)"
+    )
     grp = parser.add_mutually_exclusive_group(required=True)
-    grp.add_argument("--config",       help="YAML config path (auto-resolves run_dir)")
-    grp.add_argument("--run_dir",      help="Run dir with checkpoints/best.pt and model_config.json")
+    grp.add_argument("--config",    help="YAML config path (auto-resolves run_dir)")
+    grp.add_argument("--run_dir",   help="Run dir with checkpoints/best.pt and model_config.json")
     parser.add_argument("--feature_type", default=None,
                         help="fingerprint|graph|sme_graph (required when --run_dir used)")
-    parser.add_argument("--initpool",    required=True, help="CSV with initial SMILES pool")
-    parser.add_argument("--smiles_col",  default="smiles")
-    parser.add_argument("--z_samples",   required=True, help="Path to z_samples.npy from sample_cfg.py")
-    parser.add_argument("--nstep",       type=int,   default=10)
-    parser.add_argument("--target_pool", type=int,   default=400)
-    parser.add_argument("--mu_prob",     type=float, default=0.3)
-    parser.add_argument("--gau_sigma",   type=float, default=0.001)
-    parser.add_argument("--bandwidth",   default="scott",
-                        help="KDE bandwidth: 'scott', 'silverman', or float (default: scott)")
-    parser.add_argument("--mutate_rxn",  default="mutate_reaction.dat")
-    parser.add_argument("--out_dir",     default="outputs/ga_latent")
+    parser.add_argument("--initpool",     required=True, help="CSV with initial SMILES pool")
+    parser.add_argument("--smiles_col",   default="smiles")
+    parser.add_argument("--z_samples",    required=True,
+                        help="Path to z_samples.npy from sample_cfg.py")
+    parser.add_argument("--nstep",        type=int,   default=20)
+    parser.add_argument("--n_candidates", type=int,   default=5,
+                        help="Crossover/mutation candidates per slot per step (default: 5)")
+    parser.add_argument("--mu_prob",      type=float, default=0.3)
+    parser.add_argument("--mutate_rxn",   default="mutate_reaction.dat")
+    parser.add_argument("--out_dir",      default="outputs/ga_latent")
+    parser.add_argument("--seed",         type=int,   default=42)
     args = parser.parse_args()
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
 
     out_dir = Path(args.out_dir)
     if out_dir.exists():
@@ -289,11 +313,10 @@ def main():
                           "mps"  if torch.backends.mps.is_available() else "cpu")
     print(f"[ga_latent] device={device}")
 
-    import json
     if args.config:
-        cfg      = load_config(args.config)
-        feat_cfg = cfg["features"]
-        model_cfg = cfg["model"]
+        cfg          = load_config(args.config)
+        feat_cfg     = cfg["features"]
+        model_cfg    = cfg["model"]
         feature_type = str(feat_cfg.get("type", "fingerprint")).lower()
         from src.utils.io import resolve_run_dir
         run_dir = Path(resolve_run_dir(cfg, create_if_missing=False))
@@ -302,22 +325,18 @@ def main():
         mc_path = run_dir / "model_config.json"
         model_cfg = json.loads(mc_path.read_text()) if mc_path.exists() else {}
         feature_type = args.feature_type or model_cfg.get("feature_type", "fingerprint")
-        feat_cfg = model_cfg  # model_config.json may contain fp_bits etc.
+        feat_cfg = model_cfg
 
     model, feature_type, _ = build_encoder(run_dir, feature_type, model_cfg, feat_cfg, device)
     print(f"[ga_latent] feature_type={feature_type}")
 
     z_samples = np.load(args.z_samples).astype(np.float32)
-    print(f"[ga_latent] z_samples: {z_samples.shape}")
-
-    bw = args.bandwidth if args.bandwidth in ("scott", "silverman") else float(args.bandwidth)
-    kde = build_kde(z_samples, bandwidth=bw)
-    print(f"[ga_latent] KDE fitted  bandwidth={bw}")
+    print(f"[ga_latent] z_samples: {z_samples.shape}  (N={len(z_samples)}, D={z_samples.shape[1]})")
 
     import pandas as pd
     df = pd.read_csv(args.initpool)
-    GenPool = df[args.smiles_col].dropna().astype(str).tolist()
-    print(f"[ga_latent] initpool: {len(GenPool)} molecules")
+    initpool = df[args.smiles_col].dropna().astype(str).tolist()
+    print(f"[ga_latent] initpool: {len(initpool)} molecules")
 
     with open(args.mutate_rxn) as f:
         rxn_list = [l.strip() for l in f if l.strip()]
@@ -326,27 +345,34 @@ def main():
     co.size_stdev   = 40
     co.string_type  = "SMILES"
 
+    # 1:1 Hungarian assignment: mol_i → z_samples[assignment[i]]
+    pool, assignment = hungarian_assign(
+        initpool, z_samples, model, feat_cfg, feature_type, device
+    )
+    current_dists = compute_dists(pool, assignment, z_samples, model, feat_cfg, feature_type, device)
+
     t0 = time.time()
     for istep in range(args.nstep):
-        GenPool = GB_GA(
-            model, feat_cfg, feature_type, kde, device,
-            GenPool, istep,
-            args.gau_sigma, args.target_pool, rxn_list, args.mu_prob,
+        pool, current_dists = GB_GA_per_sample(
+            model, feat_cfg, feature_type, device,
+            pool, assignment, z_samples, current_dists,
+            istep, args.n_candidates, rxn_list, args.mu_prob,
             out_dir,
         )
-        print(f"  step {istep+1} elapsed: {time.time()-t0:.1f}s", flush=True)
+        print(f"  elapsed: {time.time() - t0:.1f}s", flush=True)
 
-    # save final pool with scores
-    final_scores = fitness_kde(GenPool, model, feat_cfg, feature_type, kde, device)
-    order = np.argsort(-final_scores)
+    # save results sorted by L2 distance
+    order = np.argsort(current_dists)
     import pandas as pd
     result = pd.DataFrame({
-        "smiles":    [GenPool[i] for i in order],
-        "kde_score": [final_scores[i] for i in order],
+        "smiles":       [pool[i]                         for i in order],
+        "z_target_idx": [int(assignment[i])              for i in order],
+        "l2_dist":      [float(np.sqrt(current_dists[i])) for i in order],
     })
     result.to_csv(out_dir / "final_pool.csv", index=False)
-    print(f"\n[ga_latent] Done. {len(GenPool)} molecules → {out_dir}/final_pool.csv")
-    print(f"[ga_latent] top-5 KDE scores: {final_scores[order[:5]]}")
+
+    print(f"\n[ga_latent] Done. {len(pool)} molecules → {out_dir}/final_pool.csv")
+    print(f"[ga_latent] top-5 L2 dists: {np.sqrt(current_dists[order[:5]])}")
 
 
 if __name__ == "__main__":
