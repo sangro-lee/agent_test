@@ -288,8 +288,9 @@ def main():
     grp.add_argument("--run_dir",   help="Run dir with checkpoints/best.pt and model_config.json")
     parser.add_argument("--feature_type", default=None,
                         help="fingerprint|graph|sme_graph (required when --run_dir used)")
-    parser.add_argument("--initpool",     required=True, help="CSV with initial SMILES pool")
-    parser.add_argument("--smiles_col",   default="smiles")
+    parser.add_argument("--initpool",     default="initpool.dat",
+                        help="CSV/.dat with initial SMILES pool (default: initpool.dat)")
+    parser.add_argument("--smiles_col",   default="SMILES")
     parser.add_argument("--z_samples",    required=True,
                         help="Path to z_samples.npy from sample_cfg.py")
     parser.add_argument("--nstep",        type=int,   default=20)
