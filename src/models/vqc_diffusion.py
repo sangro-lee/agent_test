@@ -232,13 +232,20 @@ class AngleVQCDenoiser(nn.Module):
             ])
 
         # ── CondInj per block: cond → (w, b) each of size D ──────────────
-        # Direct projection (no bottleneck) to preserve conditioning signal.
+        # Matches MLP _CondInjectionLayer: Linear→SiLU→Linear hidden projection.
         self.cond2wb = nn.ModuleList([
-            nn.Linear(cond_embed_dim, n_qubits * 2)
-            for _ in range(num_blocks)
+            nn.Sequential(
+                nn.Linear(cond_embed_dim, cond_embed_dim),
+                nn.SiLU(),
+                nn.Linear(cond_embed_dim, n_qubits * 2),
+            ) for _ in range(num_blocks)
         ])
         self.norms = nn.ModuleList([
             nn.LayerNorm(n_qubits) for _ in range(num_blocks)
+        ])
+        # Matches MLP _CondInjectionLayer f2: post-AdaIN projection.
+        self.f2 = nn.ModuleList([
+            nn.Linear(n_qubits, n_qubits) for _ in range(num_blocks)
         ])
 
         # ── Per-block learnable affine on VQC output (optional) ──────────
@@ -313,9 +320,8 @@ class AngleVQCDenoiser(nn.Module):
         cond  = torch.cat([t_emb, c_emb], dim=-1)         # (B, cond_embed_dim)
 
         x = z_t
-        for i, (vqc, c2wb, norm) in enumerate(zip(self.vqc_blocks, self.cond2wb, self.norms)):
+        for i, (vqc, c2wb, norm, f2) in enumerate(zip(self.vqc_blocks, self.cond2wb, self.norms, self.f2)):
             x_enc = torch.tanh(x)
-#            x_enc = x                              # bound to (-1,1) before encoding
             if self.use_reupload:
                 if self.full_encoding:
                     scaled = torch.einsum('lod,bd->blo', self.weight_matrices[i], x_enc) \
@@ -332,8 +338,10 @@ class AngleVQCDenoiser(nn.Module):
                     q_out = d1 * norm(q_out) + d2
                 else:
                     q_out = norm(q_out)
-            w, b  = c2wb(cond).chunk(2, dim=-1)           # (B, D) each
-            x     = x + w * q_out + b                     # residual + AdaIN
+            w, b = c2wb(cond).chunk(2, dim=-1)            # (B, D) each
+            h    = w * q_out + b                          # AdaIN scale+shift
+            h    = f2(torch.nn.functional.gelu(h))        # post-AdaIN projection (matches MLP f2)
+            x    = x + h                                  # residual
 
         return x                                           # ε̂ (B, latent_dim)
 
