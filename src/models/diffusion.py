@@ -1,8 +1,37 @@
 from __future__ import annotations
 
+import math
+
 import torch
 from torch import nn
 from torch.nn.utils.parametrizations import orthogonal
+
+
+class SinusoidalTimeEmbedding(nn.Module):
+    """
+    Drop-in replacement for time_mlp. Matches G2D-Diff get_timestep_embedding + time_layer.
+    Accepts same input as current time_mlp: t (B, 1) normalized [0, 1].
+    Usage: self.time_mlp = SinusoidalTimeEmbedding(time_dim)  — forward unchanged.
+    """
+    def __init__(self, time_dim: int, T: int = 1000):
+        super().__init__()
+        self.half = time_dim // 2
+        self.T = T
+        self.mlp = nn.Sequential(
+            nn.Linear(time_dim, time_dim),
+            nn.SiLU(),
+            nn.Linear(time_dim, time_dim),
+        )
+
+    def forward(self, t: torch.Tensor) -> torch.Tensor:
+        t_int = t * self.T
+        freq = torch.exp(
+            -math.log(10000) *
+            torch.arange(self.half, dtype=torch.float32, device=t.device) / (self.half - 1)
+        )
+        emb = t_int * freq
+        emb = torch.cat([torch.sin(emb), torch.cos(emb)], dim=-1)
+        return self.mlp(emb)
 
 
 class DenoisingMLP(nn.Module):
@@ -46,7 +75,7 @@ class DenoisingMLP(nn.Module):
 class _CondInj(nn.Module):
     """
     Pure AdaIN condition injection: takes a pre-normalized feature h_norm,
-    applies w*h_norm + b → f2(GELU). No residual (matches G2D-Diff ConditioningBlock).
+    applies x + f2(GELU(w*h_norm + b)). Residual kept for stable training on small latents.
     Shared by MLP and VQC.
     """
     def __init__(self, hidden_dim: int, cond_embed_dim: int):
@@ -58,11 +87,11 @@ class _CondInj(nn.Module):
             nn.Linear(hidden_dim, hidden_dim * 2),
         )
 
-    def forward(self, h_norm: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, h_norm: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
         wb = self.cond2wb(cond)
         w, b = wb.chunk(2, dim=-1)
         h = w * h_norm + b
-        return self.f2(torch.nn.functional.gelu(h))
+        return x + self.f2(torch.nn.functional.gelu(h))
 
 
 class ConditionalDenoisingMLP(nn.Module):
@@ -94,6 +123,8 @@ class ConditionalDenoisingMLP(nn.Module):
         self.num_layers = int(num_layers)
         self.use_orthogonal = bool(use_orthogonal)
 
+        # To switch to sinusoidal embedding (G2D-Diff style), replace with:
+        # self.time_mlp = SinusoidalTimeEmbedding(self.time_dim)
         self.time_mlp = nn.Sequential(
             nn.Linear(1, self.time_dim),
             nn.SiLU(),
@@ -169,7 +200,7 @@ class ConditionalDenoisingMLP(nn.Module):
             self.input_projs, self.f1_layers, self.norms, self.output_projs, self.cond_layers
         ):
             h = norm(out_proj(f1(in_proj(x))))   # latent → hidden → latent → norm
-            x = cond_layer(h, cond)              # CondInj at latent_dim (normed)
+            x = cond_layer(x, h, cond)           # CondInj at latent_dim (normed)
         return self.final_layer(x)
 
 

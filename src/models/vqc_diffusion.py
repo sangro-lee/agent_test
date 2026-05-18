@@ -209,6 +209,8 @@ class AngleVQCDenoiser(nn.Module):
         cond_embed_dim = time_dim + cond_dim
 
         # ── Classical conditioning embeddings ─────────────────────────────
+        # To switch to sinusoidal embedding (G2D-Diff style), replace with:
+        # self.time_mlp = SinusoidalTimeEmbedding(time_dim)  # from src.models.diffusion import SinusoidalTimeEmbedding
         self.time_mlp = nn.Sequential(
             nn.Linear(1, time_dim), nn.SiLU(), nn.Linear(time_dim, time_dim)
         )
@@ -350,7 +352,7 @@ class AngleVQCDenoiser(nn.Module):
                     q_out = norm(d1 * q_out + d2)
                 else:
                     q_out = norm(q_out)
-            x = cond_layer(q_out, cond)                    # _CondInj: f2(gelu(w*q_out+b))
+            x = cond_layer(x, q_out, cond)                 # _CondInj: x + f2(gelu(w*q_out+b))
 
         # Final VQC: unconditional quantum projection
         x_enc = torch.tanh(x)
