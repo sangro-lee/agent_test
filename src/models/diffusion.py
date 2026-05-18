@@ -43,6 +43,29 @@ class DenoisingMLP(nn.Module):
         return self.main(h)
 
 
+class _CondInj(nn.Module):
+    """
+    Pure AdaIN condition injection: takes a pre-normalized feature h_norm,
+    applies w*h_norm + b → f2(GELU) → residual addition to x.
+    Shared by MLP (_CondInjectionLayer wraps this) and VQC (feeds VQC output directly).
+    """
+    def __init__(self, hidden_dim: int, cond_embed_dim: int):
+        super().__init__()
+        self.f2 = nn.Linear(hidden_dim, hidden_dim)
+        self.cond2wb = nn.Sequential(
+            nn.Linear(cond_embed_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim * 2),
+        )
+
+    def forward(self, x: torch.Tensor, h_norm: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
+        wb = self.cond2wb(cond)
+        w, b = wb.chunk(2, dim=-1)
+        h = w * h_norm + b
+        h = self.f2(torch.nn.functional.gelu(h))
+        return x + h
+
+
 class _CondInjectionLayer(nn.Module):
     """
     Single AdaIN-style condition injection layer (from G2D-Diff paper).
@@ -53,21 +76,11 @@ class _CondInjectionLayer(nn.Module):
         super().__init__()
         self.f1 = nn.Linear(hidden_dim, hidden_dim)
         self.norm = nn.LayerNorm(hidden_dim)
-        self.f2 = nn.Linear(hidden_dim, hidden_dim)
-        # cond2wb: condition+time → scale and shift
-        self.cond2wb = nn.Sequential(
-            nn.Linear(cond_embed_dim, hidden_dim),
-            nn.SiLU(),
-            nn.Linear(hidden_dim, hidden_dim * 2),  # first half=scale, second half=shift
-        )
+        self.inj = _CondInj(hidden_dim, cond_embed_dim)
 
     def forward(self, x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
-        wb = self.cond2wb(cond)                      # (B, hidden_dim*2)
-        w, b = wb.chunk(2, dim=-1)                   # each (B, hidden_dim)
-        h = self.norm(self.f1(x))
-        h = w * h + b                                # AdaIN scale+shift
-        h = self.f2(torch.nn.functional.gelu(h))
-        return x + h                                 # residual
+        h_norm = self.norm(self.f1(x))
+        return self.inj(x, h_norm, cond)
 
 
 class ConditionalDenoisingMLP(nn.Module):

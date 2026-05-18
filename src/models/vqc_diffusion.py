@@ -14,6 +14,8 @@ import pennylane as qml
 import torch
 import torch.nn as nn
 
+from src.models.diffusion import _CondInj
+
 def _make_reupload_vqc_layer(
     n_qubits: int,
     n_layers: int,
@@ -231,21 +233,12 @@ class AngleVQCDenoiser(nn.Module):
                 for _ in range(num_blocks)
             ])
 
-        # ── CondInj per block: cond → (w, b) each of size D ──────────────
-        # Matches MLP _CondInjectionLayer: Linear→SiLU→Linear hidden projection.
-        self.cond2wb = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(cond_embed_dim, cond_embed_dim),
-                nn.SiLU(),
-                nn.Linear(cond_embed_dim, n_qubits * 2),
-            ) for _ in range(num_blocks)
+        # ── CondInj per block: shared with MLP via _CondInj ──────────────
+        self.cond_layers = nn.ModuleList([
+            _CondInj(n_qubits, cond_embed_dim) for _ in range(num_blocks)
         ])
         self.norms = nn.ModuleList([
             nn.LayerNorm(n_qubits) for _ in range(num_blocks)
-        ])
-        # Matches MLP _CondInjectionLayer f2: post-AdaIN projection.
-        self.f2 = nn.ModuleList([
-            nn.Linear(n_qubits, n_qubits) for _ in range(num_blocks)
         ])
 
         # ── Per-block learnable affine on VQC output (optional) ──────────
@@ -320,7 +313,7 @@ class AngleVQCDenoiser(nn.Module):
         cond  = torch.cat([t_emb, c_emb], dim=-1)         # (B, cond_embed_dim)
 
         x = z_t
-        for i, (vqc, c2wb, norm, f2) in enumerate(zip(self.vqc_blocks, self.cond2wb, self.norms, self.f2)):
+        for i, (vqc, cond_layer, norm) in enumerate(zip(self.vqc_blocks, self.cond_layers, self.norms)):
             x_enc = torch.tanh(x)
             if self.use_reupload:
                 if self.full_encoding:
@@ -330,7 +323,7 @@ class AngleVQCDenoiser(nn.Module):
                     scaled = self.lambda_scales[i] * x_enc.unsqueeze(1) + self.input_biases[i]
                 inp = scaled.reshape(x.shape[0], -1)                # (B, n_layers * n_qubits)
                 q_out = vqc(inp.cpu().double()).to(x.device).float()
-                q_out = self.output_scales[i] * norm(q_out)         # trainable output scale
+                q_out = self.output_scales[i] * norm(q_out)         # VQC output = h_norm for CondInj
             else:
                 q_out = vqc(x_enc.cpu().double()).to(x.device).float()
                 if self.use_delta:
@@ -338,10 +331,7 @@ class AngleVQCDenoiser(nn.Module):
                     q_out = d1 * norm(q_out) + d2
                 else:
                     q_out = norm(q_out)
-            w, b = c2wb(cond).chunk(2, dim=-1)            # (B, D) each
-            h    = w * q_out + b                          # AdaIN scale+shift
-            h    = f2(torch.nn.functional.gelu(h))        # post-AdaIN projection (matches MLP f2)
-            x    = x + h                                  # residual
+            x = cond_layer(x, q_out, cond)                # _CondInj: x + f2(gelu(w*q_out+b))
 
         return x                                           # ε̂ (B, latent_dim)
 
