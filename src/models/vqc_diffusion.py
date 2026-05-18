@@ -274,6 +274,24 @@ class AngleVQCDenoiser(nn.Module):
                 nn.Parameter(torch.ones(n_qubits)) for _ in range(num_blocks)
             ])
 
+        # ── Final VQC: unconditional quantum projection (no conditioning) ──
+        if use_reupload and self.use_zz:
+            self.final_vqc = _make_zz_reupload_vqc_layer(n_qubits, int(n_layers), device_type, initial_cnot=initial_cnot)
+        elif use_reupload:
+            self.final_vqc = _make_reupload_vqc_layer(n_qubits, int(n_layers), device_type, initial_cnot=initial_cnot)
+        else:
+            self.final_vqc = _make_angle_vqc_layer(n_qubits, int(n_layers), device_type, initial_cnot=initial_cnot)
+
+        if use_reupload:
+            if self.full_encoding:
+                self.final_weight_matrix = nn.Parameter(
+                    torch.eye(n_qubits).unsqueeze(0).repeat(n_layers, 1, 1)
+                )
+            else:
+                self.final_lambda_scales = nn.Parameter(torch.ones(n_layers, n_qubits))
+            self.final_input_biases  = nn.Parameter(torch.zeros(n_layers, n_qubits))
+            self.final_output_scales = nn.Parameter(torch.ones(n_qubits))
+
         # ── Normalization buffers ─────────────────────────────────────────
         self.register_buffer("z_mean", torch.zeros(self.latent_dim), persistent=True)
         self.register_buffer("z_std",  torch.ones(self.latent_dim),  persistent=True)
@@ -289,9 +307,10 @@ class AngleVQCDenoiser(nn.Module):
             self.c_std.copy_(c_std.detach().view(1))
 
     def to(self, *args, **kwargs):
-        """Keep vqc_blocks on CPU regardless of device transfer."""
+        """Keep vqc_blocks and final_vqc on CPU regardless of device transfer."""
         super().to(*args, **kwargs)
         self.vqc_blocks.cpu()
+        self.final_vqc.cpu()
         return self
 
     def forward(self, z_t: torch.Tensor, t: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
@@ -331,7 +350,21 @@ class AngleVQCDenoiser(nn.Module):
                     q_out = norm(d1 * q_out + d2)
                 else:
                     q_out = norm(q_out)
-            x = cond_layer(x, q_out, cond)                # _CondInj: x + f2(gelu(w*q_out+b))
+            x = cond_layer(q_out, cond)                    # _CondInj: f2(gelu(w*q_out+b))
+
+        # Final VQC: unconditional quantum projection
+        x_enc = torch.tanh(x)
+        if self.use_reupload:
+            if self.full_encoding:
+                scaled = torch.einsum('lod,bd->blo', self.final_weight_matrix, x_enc) \
+                         + self.final_input_biases
+            else:
+                scaled = self.final_lambda_scales * x_enc.unsqueeze(1) + self.final_input_biases
+            inp = scaled.reshape(x.shape[0], -1)
+            x = self.final_vqc(inp.cpu().double()).to(x.device).float()
+            x = self.final_output_scales * x
+        else:
+            x = self.final_vqc(x_enc.cpu().double()).to(x.device).float()
 
         return x                                           # ε̂ (B, latent_dim)
 

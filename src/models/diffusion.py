@@ -46,8 +46,8 @@ class DenoisingMLP(nn.Module):
 class _CondInj(nn.Module):
     """
     Pure AdaIN condition injection: takes a pre-normalized feature h_norm,
-    applies w*h_norm + b → f2(GELU) → residual addition to x.
-    Shared by MLP (_CondInjectionLayer wraps this) and VQC (feeds VQC output directly).
+    applies w*h_norm + b → f2(GELU). No residual (matches G2D-Diff ConditioningBlock).
+    Shared by MLP and VQC.
     """
     def __init__(self, hidden_dim: int, cond_embed_dim: int):
         super().__init__()
@@ -58,12 +58,11 @@ class _CondInj(nn.Module):
             nn.Linear(hidden_dim, hidden_dim * 2),
         )
 
-    def forward(self, x: torch.Tensor, h_norm: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
+    def forward(self, h_norm: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
         wb = self.cond2wb(cond)
         w, b = wb.chunk(2, dim=-1)
         h = w * h_norm + b
-        h = self.f2(torch.nn.functional.gelu(h))
-        return x + h
+        return self.f2(torch.nn.functional.gelu(h))
 
 
 class ConditionalDenoisingMLP(nn.Module):
@@ -95,13 +94,11 @@ class ConditionalDenoisingMLP(nn.Module):
         self.num_layers = int(num_layers)
         self.use_orthogonal = bool(use_orthogonal)
 
-        # Time embedding
         self.time_mlp = nn.Sequential(
             nn.Linear(1, self.time_dim),
             nn.SiLU(),
             nn.Linear(self.time_dim, self.time_dim),
         )
-        # Condition embedding (scalar pIC50 → cond_dim)
         self.cond_mlp = nn.Sequential(
             nn.Linear(1, self.cond_dim),
             nn.SiLU(),
@@ -110,21 +107,28 @@ class ConditionalDenoisingMLP(nn.Module):
 
         cond_embed_dim = self.time_dim + self.cond_dim
 
-        # Input projection: latent → hidden
-        self.input_proj = nn.Linear(self.latent_dim, hidden_dim)
-
+        # Per-block: latent → hidden → latent, then CondInj at latent_dim
+        self.input_projs = nn.ModuleList([
+            nn.Linear(self.latent_dim, hidden_dim) for _ in range(self.num_layers)
+        ])
         self.f1_layers = nn.ModuleList([
             nn.Linear(hidden_dim, hidden_dim) for _ in range(self.num_layers)
         ])
         self.norms = nn.ModuleList([
-            nn.LayerNorm(hidden_dim) for _ in range(self.num_layers)
+            nn.LayerNorm(self.latent_dim) for _ in range(self.num_layers)
+        ])
+        self.output_projs = nn.ModuleList([
+            nn.Linear(hidden_dim, self.latent_dim) for _ in range(self.num_layers)
         ])
         self.cond_layers = nn.ModuleList([
-            _CondInj(hidden_dim, cond_embed_dim) for _ in range(self.num_layers)
+            _CondInj(self.latent_dim, cond_embed_dim) for _ in range(self.num_layers)
         ])
 
-        # Output projection: hidden → latent (predict noise)
-        self.output_proj = nn.Linear(hidden_dim, self.latent_dim)
+        self.final_layer = nn.Sequential(
+            nn.Linear(self.latent_dim, self.latent_dim),
+            nn.GELU(),
+            nn.Linear(self.latent_dim, self.latent_dim),
+        )
 
         if use_orthogonal:
             for f1, cond_layer in zip(self.f1_layers, self.cond_layers):
@@ -160,11 +164,13 @@ class ConditionalDenoisingMLP(nn.Module):
         c_embed = self.cond_mlp(c)                        # (B, cond_dim)
         cond = torch.cat([t_embed, c_embed], dim=-1)      # (B, time_dim+cond_dim)
 
-        x = self.input_proj(z_t)                          # (B, hidden_dim)
-        for f1, norm, cond_layer in zip(self.f1_layers, self.norms, self.cond_layers):
-            h_norm = norm(f1(x))
-            x = cond_layer(x, h_norm, cond)
-        return self.output_proj(x)                        # (B, latent_dim)
+        x = z_t
+        for in_proj, f1, norm, out_proj, cond_layer in zip(
+            self.input_projs, self.f1_layers, self.norms, self.output_projs, self.cond_layers
+        ):
+            h = norm(out_proj(f1(in_proj(x))))   # latent → hidden → latent → norm
+            x = cond_layer(h, cond)              # CondInj at latent_dim (normed)
+        return self.final_layer(x)
 
 
 class NoiseScheduler:
