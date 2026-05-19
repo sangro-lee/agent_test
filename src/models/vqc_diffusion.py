@@ -294,6 +294,8 @@ class AngleVQCDenoiser(nn.Module):
             self.final_input_biases  = nn.Parameter(torch.zeros(n_layers, n_qubits))
             self.final_output_scales = nn.Parameter(torch.ones(n_qubits))
 
+        # self.final_layer = nn.Linear(n_qubits, n_qubits)
+
         # ── Normalization buffers ─────────────────────────────────────────
         self.register_buffer("z_mean", torch.zeros(self.latent_dim), persistent=True)
         self.register_buffer("z_std",  torch.ones(self.latent_dim),  persistent=True)
