@@ -144,7 +144,7 @@ class ConditionalDenoisingMLP(nn.Module):
             nn.Linear(self.latent_dim, hidden_dim) for _ in range(self.num_layers)
         ])
         self.f1_layers = nn.ModuleList([
-            nn.Linear(hidden_dim, hidden_dim) for _ in range(self.num_layers)
+            nn.Linear(self.latent_dim, self.latent_dim) for _ in range(self.num_layers)
         ])
         self.norms = nn.ModuleList([
             nn.LayerNorm(self.latent_dim) for _ in range(self.num_layers)
@@ -197,11 +197,9 @@ class ConditionalDenoisingMLP(nn.Module):
         cond = torch.cat([t_embed, c_embed], dim=-1)      # (B, time_dim+cond_dim)
 
         x = z_t
-        for in_proj, f1, norm, out_proj, cond_layer in zip(
-            self.input_projs, self.f1_layers, self.norms, self.output_projs, self.cond_layers
-        ):
-            h = norm(out_proj(F.gelu(f1(F.gelu(in_proj(x))))))   # latent → hidden → latent → norm
-            x = cond_layer(x, h, cond)           # CondInj at latent_dim (normed)
+        for f1, norm, cond_layer in zip(self.f1_layers, self.norms, self.cond_layers):
+            h = norm(f1(x))              # latent_dim throughout
+            x = cond_layer(x, h, cond)
         return self.final_layer(x)
 
 
