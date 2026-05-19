@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 
 import torch
+import torch.nn.functional as F
 from torch import nn
 from torch.nn.utils.parametrizations import orthogonal
 
@@ -91,7 +92,7 @@ class _CondInj(nn.Module):
         wb = self.cond2wb(cond)
         w, b = wb.chunk(2, dim=-1)
         h = w * h_norm + b
-        return x + self.f2(torch.nn.functional.gelu(h))
+        return x + self.f2(F.gelu(h))
 
 
 class ConditionalDenoisingMLP(nn.Module):
@@ -199,7 +200,7 @@ class ConditionalDenoisingMLP(nn.Module):
         for in_proj, f1, norm, out_proj, cond_layer in zip(
             self.input_projs, self.f1_layers, self.norms, self.output_projs, self.cond_layers
         ):
-            h = norm(out_proj(f1(in_proj(x))))   # latent → hidden → latent → norm
+            h = norm(out_proj(F.gelu(f1(F.gelu(in_proj(x))))))   # latent → hidden → latent → norm
             x = cond_layer(x, h, cond)           # CondInj at latent_dim (normed)
         return self.final_layer(x)
 
