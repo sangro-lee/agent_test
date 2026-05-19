@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 from torch.nn.utils.parametrizations import orthogonal
 
@@ -75,24 +74,17 @@ class DenoisingMLP(nn.Module):
 
 class _CondInj(nn.Module):
     """
-    Pure AdaIN condition injection: takes a pre-normalized feature h_norm,
-    applies x + f2(GELU(w*h_norm + b)). Residual kept for stable training on small latents.
+    Simple AdaIN condition injection: x += w * h_norm + b.
+    Direct projection from cond_embed_dim to hidden_dim*2 — no bottleneck.
     Shared by MLP and VQC.
     """
     def __init__(self, hidden_dim: int, cond_embed_dim: int):
         super().__init__()
-        self.f2 = nn.Linear(hidden_dim, hidden_dim)
-        self.cond2wb = nn.Sequential(
-            nn.Linear(cond_embed_dim, hidden_dim),
-            nn.SiLU(),
-            nn.Linear(hidden_dim, hidden_dim * 2),
-        )
+        self.cond2wb = nn.Linear(cond_embed_dim, hidden_dim * 2)
 
     def forward(self, x: torch.Tensor, h_norm: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
-        wb = self.cond2wb(cond)
-        w, b = wb.chunk(2, dim=-1)
-        h = w * h_norm + b
-        return x + self.f2(F.gelu(h))
+        w, b = self.cond2wb(cond).chunk(2, dim=-1)
+        return x + w * h_norm + b
 
 
 class ConditionalDenoisingMLP(nn.Module):
@@ -156,16 +148,11 @@ class ConditionalDenoisingMLP(nn.Module):
             _CondInj(self.latent_dim, cond_embed_dim) for _ in range(self.num_layers)
         ])
 
-        self.final_layer = nn.Sequential(
-            nn.Linear(self.latent_dim, self.latent_dim),
-            nn.GELU(),
-            nn.Linear(self.latent_dim, self.latent_dim),
-        )
+        self.final_layer = nn.Linear(self.latent_dim, self.latent_dim)
 
         if use_orthogonal:
-            for f1, cond_layer in zip(self.f1_layers, self.cond_layers):
+            for f1 in self.f1_layers:
                 orthogonal(f1)
-                orthogonal(cond_layer.f2)
 
         self.register_buffer("z_mean", torch.zeros(self.latent_dim), persistent=True)
         self.register_buffer("z_std", torch.ones(self.latent_dim), persistent=True)

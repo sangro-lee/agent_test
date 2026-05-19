@@ -352,7 +352,7 @@ class AngleVQCDenoiser(nn.Module):
                     q_out = norm(d1 * q_out + d2)
                 else:
                     q_out = norm(q_out)
-            x = cond_layer(x, q_out, cond)                 # _CondInj: x + f2(gelu(w*q_out+b))
+            x = cond_layer(x, q_out, cond)                 # _CondInj: x + w*q_out + b
 
         # Final VQC: unconditional quantum projection
         x_enc = torch.tanh(x)
