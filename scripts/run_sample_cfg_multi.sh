@@ -3,9 +3,15 @@
 # Edit the arrays below, then: bash scripts/run_sample_cfg_multi.sh
 
 # ── 설정 ───────────────────────────────────────────────────────────────────
-EXPS=("sme_random")
-GUIDANCE_SCALES=(1.0 2.0 3.0 5.0)
-DATE=""           # diffusion 날짜 폴더 (e.g. "2026-03-31"); 비우면 legacy path
+EXPS=(
+#"fix_mlp_z4_sub_1_xh"
+#"mlp_sub_1_0519_nf"
+"mlp_sub_1_0519"
+#"vqc_sub_1_0519_nf"
+#"vqc_sub_1_0519"
+)
+GUIDANCE_SCALES=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 1.0 1.5 2.0 2.5 3.0 3.5 4.0 5.0 5.5 6.0 6.5 7.0 10.0)
+DATE="2026-05-19"           # diffusion 날짜 폴더 (e.g. "2026-03-31"); 비우면 legacy path
 TARGET_PIC50=""   # 고정 목표 pIC50; 비우면 train 90th percentile 자동 사용
 # ──────────────────────────────────────────────────────────────────────────
 

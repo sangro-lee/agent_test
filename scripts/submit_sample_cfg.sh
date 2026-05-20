@@ -5,8 +5,8 @@
 #SBATCH -n 8
 #SBATCH --gres=gpu:1
 #SBATCH --time=9999:59:59
-#SBATCH -o ./logs/XXX_JOB.o%j
-#SBATCH -e ./logs/XXX_JOB.e%j
+#SBATCH -o ./logs/260519/XXX_JOB.o%j
+#SBATCH -e ./logs/260519/XXX_JOB.e%j
 
 # Usage:
 #   sbatch scripts/submit_sample_cfg.sh sme_random 3.0 8.0 2026-03-31
@@ -58,6 +58,11 @@ fi
 $PYTHON "$ROOT/scripts/sample_cfg.py" \
   --config "$RESOLVED" \
   --guidance_scale "$GUIDANCE_SCALE" \
-  --n_samples 500 \
+  --T 1000 \
+  --diff_epochs 3000 \
+  --n_samples 1000 \
+  --retrieval_mode nearest1 \
+  --retrieval_metric euclidean \
+  --save_trajectory \
   --top_k 50 \
   $EXTRA_ARGS

@@ -47,3 +47,7 @@ scripts/visualize_vqc.py
 Substructure-Mask-Explanation/
 history/
 visual.py
+
+#logs
+logs/
+scripts/logs/

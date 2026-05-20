@@ -2,9 +2,13 @@
 # Submit train_diffusion jobs for all combinations of EXPs × epochs × T.
 # Edit the arrays below, then: bash scripts/run_diffusion_multi.sh
 
-EXPS=("sme_random" "gnn_random")
-EPOCHS=(200)
-TS=(1000)
+EXPS=(
+#"vqc_sub_1_0519_2"
+"vqc_sub_1_0519_nf"
+#"mlp_sub_1_0519_nf"
+)
+EPOCHS=(3000)
+TS=(1000 2000 3000)
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TEMPLATE="$ROOT/scripts/submit_train_diffusion.sh"
