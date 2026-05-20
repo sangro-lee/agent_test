@@ -187,8 +187,8 @@ class ConditionalDenoisingMLP(nn.Module):
         for f1, norm, cond_layer in zip(self.f1_layers, self.norms, self.cond_layers):
             h = norm(f1(x))              # latent_dim throughout
             x = cond_layer(x, h, cond)
-        return self.final_layer(x)
-
+#        return self.final_layer(x)
+        return x
 
 class NoiseScheduler:
     def __init__(

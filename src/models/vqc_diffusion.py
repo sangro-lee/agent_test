@@ -346,7 +346,7 @@ class AngleVQCDenoiser(nn.Module):
                     scaled = self.lambda_scales[i] * x_enc.unsqueeze(1) + self.input_biases[i]
                 inp = scaled.reshape(x.shape[0], -1)                # (B, n_layers * n_qubits)
                 q_out = vqc(inp.cpu().double()).to(x.device).float()
-                q_out = norm(self.output_scales[i] * q_out)         # Skolik scaling → norm (matches MLP: f1 → norm)
+                q_out = self.output_scales[i] * norm(q_out)         # norm → Skolik scaling
             else:
                 q_out = vqc(x_enc.cpu().double()).to(x.device).float()
                 if self.use_delta:
@@ -356,19 +356,19 @@ class AngleVQCDenoiser(nn.Module):
                     q_out = norm(q_out)
             x = cond_layer(x, q_out, cond)                 # _CondInj: x + w*q_out + b
 
-        # Final VQC: unconditional quantum projection
-        x_enc = torch.tanh(x)
-        if self.use_reupload:
-            if self.full_encoding:
-                scaled = torch.einsum('lod,bd->blo', self.final_weight_matrix, x_enc) \
-                         + self.final_input_biases
-            else:
-                scaled = self.final_lambda_scales * x_enc.unsqueeze(1) + self.final_input_biases
-            inp = scaled.reshape(x.shape[0], -1)
-            x = self.final_vqc(inp.cpu().double()).to(x.device).float()
-            x = self.final_output_scales * x
-        else:
-            x = self.final_vqc(x_enc.cpu().double()).to(x.device).float()
+        # # Final VQC: unconditional quantum projection
+        # x_enc = torch.tanh(x)
+        # if self.use_reupload:
+        #     if self.full_encoding:
+        #         scaled = torch.einsum('lod,bd->blo', self.final_weight_matrix, x_enc) \
+        #                  + self.final_input_biases
+        #     else:
+        #         scaled = self.final_lambda_scales * x_enc.unsqueeze(1) + self.final_input_biases
+        #     inp = scaled.reshape(x.shape[0], -1)
+        #     x = self.final_vqc(inp.cpu().double()).to(x.device).float()
+        #     x = self.final_output_scales * x
+        # else:
+        #     x = self.final_vqc(x_enc.cpu().double()).to(x.device).float()
 
         return x                                           # ε̂ (B, latent_dim)
 
