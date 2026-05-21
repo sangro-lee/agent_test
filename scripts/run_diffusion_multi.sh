@@ -4,10 +4,12 @@
 
 EXPS=(
 #"vqc_sub_1_0519_2"
-"vqc_sub_1_0519_nf"
+#"vqc_sub_1_0520_nf"
+#"mlp_sub_1_0520_nf"
+"mlp_sub_1_0520_nf_tan"
 #"mlp_sub_1_0519_nf"
 )
-EPOCHS=(3000)
+EPOCHS=(3000 5000)
 TS=(1000 2000 3000)
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

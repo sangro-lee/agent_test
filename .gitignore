@@ -1,6 +1,7 @@
 # outputs & experiments
 outputs/
 memory/
+configs/
 
 # python
 __pycache__/

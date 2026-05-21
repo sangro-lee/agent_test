@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH -J XXX_JOB
-#SBATCH -p a5k2
+#SBATCH -p l40s
 #SBATCH -N 1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:1
 #SBATCH --time=9999:59:59
-#SBATCH -o ./logs/260519/XXX_JOB.o%j
-#SBATCH -e ./logs/260519/XXX_JOB.e%j
+#SBATCH -o ./logs/260520/XXX_JOB.o%j
+#SBATCH -e ./logs/260520/XXX_JOB.e%j
 
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
