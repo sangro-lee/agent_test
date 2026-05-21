@@ -337,7 +337,8 @@ class AngleVQCDenoiser(nn.Module):
 
         x = z_t
         for i, (vqc, cond_layer, norm) in enumerate(zip(self.vqc_blocks, self.cond_layers, self.norms)):
-            x_enc = torch.tanh(x)
+#            x_enc = torch.tanh(x)
+            x_enc = x
             if self.use_reupload:
                 if self.full_encoding:
                     scaled = torch.einsum('lod,bd->blo', self.weight_matrices[i], x_enc) \
