@@ -185,7 +185,7 @@ class ConditionalDenoisingMLP(nn.Module):
 
         x = z_t
         for f1, norm, cond_layer in zip(self.f1_layers, self.norms, self.cond_layers):
-            h = norm(f1(x))              # latent_dim throughout
+            h = torch.nn.functional.gelu(norm(f1(x)))
 #            h = torch.tanh(norm(f1(x)))
             x = cond_layer(x, h, cond)
 #        return self.final_layer(x)
